@@ -1,56 +1,28 @@
-/* На ПК: в одну строчку справа от "?" */
 .st-recap-meta-badge {
-    display: inline-flex !important;
-    align-items: center !important;
-    gap: 4px !important;
-    margin-left: 6px !important;
-    font-size: calc(var(--mainFontSize, 16px) * 0.68) !important;
+    display: block !important;
+    margin-left: 4px !important;
+    margin-top: -3px !important;
+    margin-bottom: 2px !important;
+    font-size: 10.5px !important;
     font-weight: 400 !important;
     color: var(--SmartThemeBodyColor, #ccc) !important;
     opacity: 0.42 !important;
-    letter-spacing: 0.01em !important;
-    line-height: 1 !important;
+    letter-spacing: 0.02em !important;
+    line-height: 1.2 !important;
     transition: opacity 0.25s ease !important;
     user-select: none !important;
     white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
 }
 
 .st-recap-meta-badge:hover {
     opacity: 0.85 !important;
 }
 
-.st-recap-meta-model {
-    max-width: 240px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    display: inline-block;
-}
-
-/* 📱 На мобилках: компактный шрифт, вплотную под датой без дырки, а кнопки "... ✏️" остаются справа! */
-@media screen and (max-width: 1000px) {
-    #chat .mes .ch_name > .flex-container,
-    #chat .mes .ch_name .alignItemsBaseline {
-        flex-wrap: wrap !important;
-        row-gap: 0px !important;
-    }
-
+@media screen and (max-width: 768px) {
     .st-recap-meta-badge {
-        display: flex !important;
-        width: 100% !important;
-        flex-basis: 100% !important;
-        margin-left: 4px !important;
-        margin-top: -2px !important; /* Убираем пустую дырку под датой */
-        margin-bottom: 0px !important;
-        font-size: 9.5px !important; /* Аккуратный мелкий шрифт, чтобы всё влезало */
-        line-height: 1.1 !important;
-        white-space: nowrap !important;
-        overflow: hidden !important;
-    }
-
-    .st-recap-meta-model {
-        max-width: 135px !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
+        font-size: 9.5px !important;
+        margin-top: -4px !important;
     }
 }
