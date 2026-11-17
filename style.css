@@ -1,6 +1,7 @@
+/* На ПК: аккуратно в одну строчку справа от "?" */
 .st-recap-meta-badge {
     display: inline-flex !important;
-    align-items: baseline !important;
+    align-items: center !important;
     gap: 4px !important;
     margin-left: 6px !important;
     font-size: calc(var(--mainFontSize, 16px) * 0.7) !important;
@@ -20,25 +21,33 @@
 }
 
 .st-recap-meta-model {
-    max-width: 220px;
+    max-width: 240px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     display: inline-block;
-    vertical-align: bottom;
 }
 
-/* 📱 АДАПТАЦИЯ ДЛЯ ТЕЛЕФОНА: чтобы длинная строка не распирала чат вширь */
-@media screen and (max-width: 768px) {
-    .st-recap-meta-badge {
-        font-size: 10.5px !important;
-        margin-left: 4px !important;
-        gap: 3px !important;
-        white-space: normal !important; /* Разрешаем мягкий перенос, если экран совсем узкий */
+/* 📱 На мобилках: ровно в красной рамке с 3-го скрина (под датой и "?", но НАД линией, в 1 строчку!) */
+@media screen and (max-width: 1000px) {
+    #chat .mes .ch_name .flex-container {
         flex-wrap: wrap !important;
     }
 
+    .st-recap-meta-badge {
+        display: flex !important;
+        width: 100% !important;
+        flex-basis: 100% !important;
+        margin-left: 4px !important;
+        margin-top: 2px !important;
+        font-size: 11px !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+    }
+
     .st-recap-meta-model {
-        max-width: 110px !important; /* Аккуратно сокращаем длинные имена моделей на мобилке */
+        max-width: 145px !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
     }
 }
