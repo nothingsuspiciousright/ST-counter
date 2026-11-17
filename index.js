@@ -85,4 +85,19 @@ function processVisibleMessages() {
 }
 
 jQuery(() => {
-    eventSource.on(event_types.CHAT_CHANGED, () => setTimeout(processVi
+    eventSource.on(event_types.CHAT_CHANGED, () => setTimeout(processVisibleMessages, 300));
+    eventSource.on(event_types.MESSAGE_RECEIVED, (id) => setTimeout(() => renderMessageStats(id), 150));
+    eventSource.on(event_types.MESSAGE_UPDATED, (id) => setTimeout(() => renderMessageStats(id), 150));
+    eventSource.on(event_types.MESSAGE_SWIPED, (id) => setTimeout(() => renderMessageStats(id), 150));
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (id) => setTimeout(() => renderMessageStats(id), 150));
+
+    const chatEl = document.getElementById('chat');
+    if (chatEl) {
+        const observer = new MutationObserver(() => {
+            processVisibleMessages();
+        });
+        observer.observe(chatEl, { childList: true });
+    }
+
+    setTimeout(processVisibleMessages, 1000);
+});
