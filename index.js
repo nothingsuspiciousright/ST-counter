@@ -1,3 +1,4 @@
+
 import { getContext } from "../../../extensions.js";
 import { eventSource, event_types } from "../../../../script.js";
 import { getTokenCountAsync } from "../../../tokenizers.js";
@@ -7,7 +8,7 @@ function cleanModelName(model) {
     return String(model).split('/').pop();
 }
 
-// 1. Внутри рекапа <details> подсвечивает [транзишены] аккуратными бледными рамочками
+// 1. Подсветка транзишенов внутри рекапа
 function highlightRecapBrackets(mesElement) {
     const detailsList = mesElement.querySelectorAll('.mes_text details');
     detailsList.forEach(details => {
@@ -21,7 +22,6 @@ function highlightRecapBrackets(mesElement) {
                 textNodes.push(node);
             }
         }
-
         textNodes.forEach(textNode => {
             const frag = document.createDocumentFragment();
             const parts = textNode.nodeValue.split(/(\[[^\]]+\])/g);
@@ -42,14 +42,13 @@ function highlightRecapBrackets(mesElement) {
     });
 }
 
-// 2. В основном тексте превращает все [TIMESKIP - ...], [MEANWHILE - END], {diary|...}, {note ...} в красивые разделители и карточки!
+// 2. Форматирование переходов, дневников и записок
 function formatMainTextTransitions(mesElement) {
     const mesText = mesElement.querySelector('.mes_text');
-    if (!mesText || mesText.dataset.transitionsFormatted === "true") return;
+    if (!mesText) return;
 
     const TRANSITION_KEYS = "TIMESKIP|DATE CHANGE|TIME OF DAY CHANGE|WEATHER CHANGE|LOCATION CHANGE|POV CHANGE|INTERLUDE|MEANWHILE|FLASHBACK|DREAM|MEMORY|DISPLAY|WORLDBUILDING|RUMOR|NEWS|FORESHADOW|SPECULATION|FACTS|TRIVIA|DIARY|NOTE|LETTER";
 
-    // Проходим по параграфам и контейнерам вне <details> и вне <pre>
     const walker = document.createTreeWalker(mesText, NodeFilter.SHOW_TEXT, {
         acceptNode(node) {
             if (!node.parentElement) return NodeFilter.FILTER_REJECT;
@@ -70,7 +69,7 @@ function formatMainTextTransitions(mesElement) {
     }
 
     const transRegex = new RegExp(
-        `(\\[(?:${TRANSITION_KEYS})\\]?\\s*[-—:]\\s*END\\]|\\[(?:${TRANSITION_KEYS})\\s*[-—:]\\s*[^\\]]+\\]|\\[(?:${TRANSITION_KEYS})\\]|\\{(?:diary|letter)\\|[^}]+\\}|\\{note\\s+[^}]+\\})`,
+        `(\\[(?:${TRANSITION_KEYS})\\]?\\s*[-–—:]\\s*END\\]|\\[(?:${TRANSITION_KEYS})\\s*[-–—:]\\s*[^\\]]+\\]|\\[(?:${TRANSITION_KEYS})\\]|\\{(?:diary|letter)\\|[^}]+\\}|\\{note\\s+[^}]+\\})`,
         "gi"
     );
 
@@ -86,45 +85,62 @@ function formatMainTextTransitions(mesElement) {
             if (!part) return;
             const trimmed = part.trim();
 
-            // А) Закрывающий тег [... - END]
-            if (/^\[.*[-—:]\s*END\]$/i.test(trimmed)) {
+            // А) Закрывающий тег
+            if (/^\[.*[-–—:]\s*END\]$/i.test(trimmed)) {
                 const div = document.createElement('div');
                 div.className = 'st-scene-divider st-scene-end';
                 div.innerHTML = `<span>✦</span>`;
                 frag.appendChild(div);
             }
-            // Б) Открывающий переход с текстом [TYPE - описание]
-            else if (/^\[([A-Z\s]+?)\s*[-—:]\s*([^\]]+)\]$/i.test(trimmed)) {
-                const m = trimmed.match(/^\[([A-Z\s]+?)\s*[-—:]\s*([^\]]+)\]$/i);
+
+            // Б) Открывающий переход с описанием
+            else if (/^\[([A-Z\s]+?)\s*[-–—:]\s*([^\]]+)\]$/i.test(trimmed)) {
+                const m = trimmed.match(/^\[([A-Z\s]+?)\s*[-–—:]\s*([^\]]+)\]$/i);
                 const type = m[1].trim().toUpperCase();
                 const desc = m[2].trim();
+
                 const div = document.createElement('div');
                 div.className = 'st-scene-divider';
-                // Для специальных сцен (FLASHBACK, DREAM, MEMORY, RUMOR, NEWS и т.д.) оставляем маленькую пометку типа
-                const showTypeTag = !['TIMESKIP', 'LOCATION CHANGE', 'TIME OF DAY CHANGE', 'DATE CHANGE', 'WEATHER CHANGE'].includes(type);
-                const tagHtml = showTypeTag ? `<span class="st-trans-tag">${type} ·</span>` : '';
+
+                const showTypeTag = ![
+                    'TIMESKIP',
+                    'LOCATION CHANGE',
+                    'TIME OF DAY CHANGE',
+                    'DATE CHANGE',
+                    'WEATHER CHANGE'
+                ].includes(type);
+
+                const tagHtml = showTypeTag
+                    ? `<span class="st-trans-tag">${type} ·</span>`
+                    : '';
+
                 div.innerHTML = `<span>✦ ${tagHtml}${desc} ✦</span>`;
                 frag.appendChild(div);
             }
-            // В) Одиночный тег [WORLDBUILDING], [RUMOR], [FACTS] и т.д.
+
+            // В) Одиночный тег
             else if (new RegExp(`^\\[(${TRANSITION_KEYS})\\]$`, 'i').test(trimmed)) {
                 const label = trimmed.slice(1, -1).trim();
-                // Если это просто техническая метка [DIARY], [NOTE], [LETTER] перед фигурной скобкой — прячем её, чтобы не дублировать карточку
+
                 if (['DIARY', 'NOTE', 'LETTER'].includes(label.toUpperCase())) {
                     return;
                 }
+
                 const div = document.createElement('div');
                 div.className = 'st-scene-divider';
                 div.innerHTML = `<span>✦ <span class="st-trans-tag">${label}</span> ✦</span>`;
                 frag.appendChild(div);
             }
-            // Г) Дневник или письмо: {diary|date|content|location|signature}
+
+            // Г) Дневник или письмо
             else if (/^\{(diary|letter)\|([^}]+)\}$/i.test(trimmed)) {
                 const m = trimmed.match(/^\{(diary|letter)\|([^}]+)\}$/i);
                 const fields = m[2].split('|').map(s => s.trim());
                 const [date = '', content = '', loc = '', sign = ''] = fields;
+
                 const card = document.createElement('div');
                 card.className = 'st-paper-card';
+
                 card.innerHTML = `
                     <div class="st-paper-header">
                         <span>✦ ${date}</span>
@@ -133,9 +149,11 @@ function formatMainTextTransitions(mesElement) {
                     <div class="st-paper-body">${content}</div>
                     ${sign ? `<div class="st-paper-sign">— ${sign}</div>` : ''}
                 `;
+
                 frag.appendChild(card);
             }
-            // Д) Записка: {note Текст записки}
+
+            // Д) Записка
             else if (/^\{note\s+([^}]+)\}$/i.test(trimmed)) {
                 const m = trimmed.match(/^\{note\s+([^}]+)\}$/i);
                 const card = document.createElement('div');
@@ -143,6 +161,7 @@ function formatMainTextTransitions(mesElement) {
                 card.innerHTML = `<div class="st-paper-body">✦ ${m[1].trim()}</div>`;
                 frag.appendChild(card);
             }
+
             else {
                 frag.appendChild(document.createTextNode(part));
             }
@@ -150,8 +169,6 @@ function formatMainTextTransitions(mesElement) {
 
         textNode.parentNode.replaceChild(frag, textNode);
     });
-
-    mesText.dataset.transitionsFormatted = "true";
 }
 
 async function renderMessageStats(messageId) {
@@ -183,11 +200,13 @@ async function renderMessageStats(messageId) {
     const enRegex = /<en>([\s\S]*?)<\/en>/gi;
     let match;
     let enContent = "";
+
     while ((match = enRegex.exec(rawText)) !== null) {
         enContent += match[1] + "\n";
     }
 
     let recapTokens = 0;
+
     if (enContent.trim().length > 0) {
         try {
             recapTokens = await getTokenCountAsync(enContent.trim());
@@ -197,11 +216,15 @@ async function renderMessageStats(messageId) {
     }
 
     // 3. Модель
-    const rawModel = message.extra?.model || message.gen_model || (message.is_user ? "" : (message.extra?.api || ""));
+    const rawModel = message.extra?.model
+        || message.gen_model
+        || (message.is_user ? "" : (message.extra?.api || ""));
+
     const modelName = cleanModelName(rawModel);
 
     // 4. Плашка в шапке
     let badge = mesElement.querySelector('.st-recap-meta-badge');
+
     if (!badge) {
         badge = document.createElement('div');
         badge.className = 'st-recap-meta-badge';
@@ -213,6 +236,7 @@ async function renderMessageStats(messageId) {
     }
 
     let parts = [];
+
     if (recapTokens > 0) {
         parts.push(`<span>${totalTokens}t (recap: ${recapTokens}t)</span>`);
     } else {
@@ -223,39 +247,76 @@ async function renderMessageStats(messageId) {
         parts.push(`<span title="${rawModel}">${modelName}</span>`);
     }
 
-    badge.innerHTML = `<span style="opacity:0.5;">·</span> ` + parts.join(` <span style="opacity:0.5;">·</span> `);
+    badge.innerHTML = `<span style="opacity:0.5;">·</span> `
+        + parts.join(` <span style="opacity:0.5;">·</span> `);
 }
 
+// 5. Повторная проверка всех видимых сообщений
 function processVisibleMessages() {
     const mesElements = document.querySelectorAll('#chat .mes[mesid]');
+
     mesElements.forEach(el => {
+        // Форматируем даже сообщения, у которых счетчик уже добавлен.
+        highlightRecapBrackets(el);
+        formatMainTextTransitions(el);
+
         if (!el.querySelector('.st-recap-meta-badge')) {
             const id = Number(el.getAttribute('mesid'));
-            if (!isNaN(id)) renderMessageStats(id);
+
+            if (!isNaN(id)) {
+                renderMessageStats(id);
+            }
         }
     });
 }
 
+// 6. События SillyTavern
 jQuery(() => {
-    eventSource.on(event_types.CHAT_CHANGED, () => setTimeout(processVisibleMessages, 300));
-    eventSource.on(event_types.MESSAGE_RECEIVED, (id) => setTimeout(() => renderMessageStats(id), 500));
-    eventSource.on(event_types.MESSAGE_UPDATED, (id) => setTimeout(() => renderMessageStats(id), 300));
-    eventSource.on(event_types.MESSAGE_SWIPED, (id) => setTimeout(() => renderMessageStats(id), 300));
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (id) => setTimeout(() => renderMessageStats(id), 600));
+    eventSource.on(
+        event_types.CHAT_CHANGED,
+        () => setTimeout(processVisibleMessages, 300)
+    );
+
+    eventSource.on(
+        event_types.MESSAGE_RECEIVED,
+        (id) => setTimeout(() => renderMessageStats(id), 500)
+    );
+
+    eventSource.on(
+        event_types.MESSAGE_UPDATED,
+        (id) => setTimeout(() => renderMessageStats(id), 300)
+    );
+
+    eventSource.on(
+        event_types.MESSAGE_SWIPED,
+        (id) => setTimeout(() => renderMessageStats(id), 300)
+    );
+
+    eventSource.on(
+        event_types.CHARACTER_MESSAGE_RENDERED,
+        (id) => setTimeout(() => renderMessageStats(id), 600)
+    );
+
     if (event_types.GENERATION_ENDED) {
         eventSource.on(event_types.GENERATION_ENDED, () => {
             const context = getContext();
+
             if (context && context.chat && context.chat.length > 0) {
-                setTimeout(() => renderMessageStats(context.chat.length - 1), 400);
+                setTimeout(
+                    () => renderMessageStats(context.chat.length - 1),
+                    400
+                );
             }
         });
     }
 
     const chatEl = document.getElementById('chat');
+
     if (chatEl) {
         const observer = new MutationObserver(() => {
             processVisibleMessages();
         });
+
         observer.observe(chatEl, { childList: true });
     }
 
