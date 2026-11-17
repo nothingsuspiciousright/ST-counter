@@ -1,0 +1,44 @@
+.st-recap-meta-badge {
+    display: inline-flex !important;
+    align-items: baseline !important;
+    gap: 4px !important;
+    margin-left: 6px !important;
+    font-size: calc(var(--mainFontSize, 16px) * 0.7) !important;
+    font-weight: 400 !important;
+    color: var(--SmartThemeBodyColor, #ccc) !important;
+    opacity: 0.42 !important;
+    letter-spacing: 0.02em !important;
+    line-height: 1.2 !important;
+    transition: opacity 0.25s ease !important;
+    user-select: none !important;
+    white-space: nowrap !important;
+    vertical-align: baseline !important;
+}
+
+.st-recap-meta-badge:hover {
+    opacity: 0.85 !important;
+}
+
+.st-recap-meta-model {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    vertical-align: bottom;
+}
+
+/* 📱 АДАПТАЦИЯ ДЛЯ ТЕЛЕФОНА: чтобы длинная строка не распирала чат вширь */
+@media screen and (max-width: 768px) {
+    .st-recap-meta-badge {
+        font-size: 10.5px !important;
+        margin-left: 4px !important;
+        gap: 3px !important;
+        white-space: normal !important; /* Разрешаем мягкий перенос, если экран совсем узкий */
+        flex-wrap: wrap !important;
+    }
+
+    .st-recap-meta-model {
+        max-width: 110px !important; /* Аккуратно сокращаем длинные имена моделей на мобилке */
+    }
+}
