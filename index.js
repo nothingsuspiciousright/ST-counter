@@ -48,7 +48,7 @@ async function renderMessageStats(messageId) {
     const rawModel = message.extra?.model || message.gen_model || (message.is_user ? "" : (message.extra?.api || ""));
     const modelName = cleanModelName(rawModel);
 
-    // 4. Вставляем СТРОГО ПОСЛЕ знака "?" (в конец контейнера шапки над линией)
+    // 4. Вставляем ВНУТРЬ левого блока (где лежит дата и "?"), ПЕРЕД кнопками "... ✏️"
     let badge = mesElement.querySelector('.st-recap-meta-badge');
     if (!badge) {
         badge = document.createElement('span');
@@ -57,10 +57,13 @@ async function renderMessageStats(messageId) {
         const chName = mesElement.querySelector('.ch_name');
         if (!chName) return;
 
-        // Кладем в конец .flex-container внутри .ch_name — это гарантирует, 
-        // что знак "?" всегда останется слева возле даты и никогда не улетит вниз!
-        const innerFlex = chName.querySelector('.flex-container') || chName;
-        innerFlex.insertAdjacentElement('beforeend', badge);
+        const timestamp = chName.querySelector('.timestamp');
+        // Берем родительский блок самой даты (левая половина шапки), чтобы не задеть кнопки "... ✏️" справа
+        const leftHeaderBlock = (timestamp && timestamp.parentElement)
+            ? timestamp.parentElement
+            : (chName.querySelector('.alignItemsBaseline') || chName);
+
+        leftHeaderBlock.insertAdjacentElement('beforeend', badge);
     }
 
     let parts = [];
@@ -82,26 +85,4 @@ function processVisibleMessages() {
     mesElements.forEach(el => {
         if (!el.querySelector('.st-recap-meta-badge')) {
             const id = Number(el.getAttribute('mesid'));
-            if (!isNaN(id)) renderMessageStats(id);
-        }
-    });
-}
-
-jQuery(() => {
-    eventSource.on(event_types.CHAT_CHANGED, () => setTimeout(processVisibleMessages, 300));
-    eventSource.on(event_types.MESSAGE_RECEIVED, (id) => setTimeout(() => renderMessageStats(id), 150));
-    eventSource.on(event_types.MESSAGE_UPDATED, (id) => setTimeout(() => renderMessageStats(id), 150));
-    eventSource.on(event_types.MESSAGE_SWIPED, (id) => setTimeout(() => renderMessageStats(id), 150));
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (id) => setTimeout(() => renderMessageStats(id), 150));
-
-    // Следим за подгрузкой старых сообщений при прокрутке чата вверх
-    const chatEl = document.getElementById('chat');
-    if (chatEl) {
-        const observer = new MutationObserver(() => {
-            processVisibleMessages();
-        });
-        observer.observe(chatEl, { childList: true });
-    }
-
-    setTimeout(processVisibleMessages, 1000);
-});
+            if (!isN
