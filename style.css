@@ -1,19 +1,18 @@
-/* На ПК: аккуратно в одну строчку справа от "?" */
+/* На ПК: в одну строчку справа от "?" */
 .st-recap-meta-badge {
     display: inline-flex !important;
     align-items: center !important;
     gap: 4px !important;
     margin-left: 6px !important;
-    font-size: calc(var(--mainFontSize, 16px) * 0.7) !important;
+    font-size: calc(var(--mainFontSize, 16px) * 0.68) !important;
     font-weight: 400 !important;
     color: var(--SmartThemeBodyColor, #ccc) !important;
     opacity: 0.42 !important;
-    letter-spacing: 0.02em !important;
-    line-height: 1.2 !important;
+    letter-spacing: 0.01em !important;
+    line-height: 1 !important;
     transition: opacity 0.25s ease !important;
     user-select: none !important;
     white-space: nowrap !important;
-    vertical-align: baseline !important;
 }
 
 .st-recap-meta-badge:hover {
@@ -28,10 +27,12 @@
     display: inline-block;
 }
 
-/* 📱 На мобилках: ровно в красной рамке с 3-го скрина (под датой и "?", но НАД линией, в 1 строчку!) */
+/* 📱 На мобилках: компактный шрифт, вплотную под датой без дырки, а кнопки "... ✏️" остаются справа! */
 @media screen and (max-width: 1000px) {
-    #chat .mes .ch_name .flex-container {
+    #chat .mes .ch_name > .flex-container,
+    #chat .mes .ch_name .alignItemsBaseline {
         flex-wrap: wrap !important;
+        row-gap: 0px !important;
     }
 
     .st-recap-meta-badge {
@@ -39,14 +40,16 @@
         width: 100% !important;
         flex-basis: 100% !important;
         margin-left: 4px !important;
-        margin-top: 2px !important;
-        font-size: 11px !important;
+        margin-top: -2px !important; /* Убираем пустую дырку под датой */
+        margin-bottom: 0px !important;
+        font-size: 9.5px !important; /* Аккуратный мелкий шрифт, чтобы всё влезало */
+        line-height: 1.1 !important;
         white-space: nowrap !important;
         overflow: hidden !important;
     }
 
     .st-recap-meta-model {
-        max-width: 145px !important;
+        max-width: 135px !important;
         overflow: hidden !important;
         text-overflow: ellipsis !important;
     }
