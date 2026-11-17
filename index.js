@@ -7,28 +7,6 @@ function cleanModelName(model) {
     return String(model).split('/').pop();
 }
 
-// 💎 Переключает все мыльные миниатюры аватарок и персон на 100% оригиналы без сжатия!
-function upgradeAvatarsToFullRes() {
-    document.querySelectorAll('img[src*="thumbnail?type=avatar"]').forEach(img => {
-        try {
-            const url = new URL(img.src, window.location.origin);
-            const file = url.searchParams.get('file');
-            if (file) {
-                img.src = `/characters/${encodeURIComponent(file)}`;
-            }
-        } catch (e) {}
-    });
-    document.querySelectorAll('img[src*="thumbnail?type=persona"]').forEach(img => {
-        try {
-            const url = new URL(img.src, window.location.origin);
-            const file = url.searchParams.get('file');
-            if (file) {
-                img.src = `/User Avatars/${encodeURIComponent(file)}`;
-            }
-        } catch (e) {}
-    });
-}
-
 // Оборачивает [транзишены в скобках] внутри рекапа в красивую бледную плашку
 function highlightRecapBrackets(mesElement) {
     const detailsList = mesElement.querySelectorAll('.mes_text details');
@@ -75,7 +53,6 @@ async function renderMessageStats(messageId) {
     if (!mesElement) return;
 
     highlightRecapBrackets(mesElement);
-    upgradeAvatarsToFullRes();
 
     const rawText = message.mes || "";
 
@@ -137,7 +114,6 @@ async function renderMessageStats(messageId) {
 }
 
 function processVisibleMessages() {
-    upgradeAvatarsToFullRes();
     const mesElements = document.querySelectorAll('#chat .mes[mesid]');
     mesElements.forEach(el => {
         if (!el.querySelector('.st-recap-meta-badge')) {
@@ -161,12 +137,6 @@ jQuery(() => {
             }
         });
     }
-
-    // Следим за всем интерфейсом, чтобы и в правой панели персонажей сразу включались HD-аватарки!
-    const bodyObserver = new MutationObserver(() => {
-        upgradeAvatarsToFullRes();
-    });
-    bodyObserver.observe(document.body, { childList: true, subtree: true });
 
     const chatEl = document.getElementById('chat');
     if (chatEl) {
