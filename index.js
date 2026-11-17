@@ -7,13 +7,53 @@ function cleanModelName(model) {
     return String(model).split('/').pop();
 }
 
+// Оборачивает [транзишены в скобках] внутри рекапа в красивую бледную плашку
+function highlightRecapBrackets(mesElement) {
+    const detailsList = mesElement.querySelectorAll('.mes_text details');
+    detailsList.forEach(details => {
+        if (details.dataset.bracketsHighlighted === "true") return;
+
+        const walker = document.createTreeWalker(details, NodeFilter.SHOW_TEXT, null);
+        const textNodes = [];
+        let node;
+        while ((node = walker.nextNode())) {
+            if (node.parentElement && node.parentElement.tagName !== 'SUMMARY' && /\[[^\]]+\]/.test(node.nodeValue)) {
+                textNodes.push(node);
+            }
+        }
+
+        textNodes.forEach(textNode => {
+            const frag = document.createDocumentFragment();
+            const parts = textNode.nodeValue.split(/(\[[^\]]+\])/g);
+            parts.forEach(part => {
+                if (part.startsWith('[') && part.endsWith(']')) {
+                    const span = document.createElement('span');
+                    span.className = 'st-recap-bracket';
+                    span.textContent = part;
+                    frag.appendChild(span);
+                } else if (part) {
+                    frag.appendChild(document.createTextNode(part));
+                }
+            });
+            textNode.parentNode.replaceChild(frag, textNode);
+        });
+
+        details.dataset.bracketsHighlighted = "true";
+    });
+}
+
 async function renderMessageStats(messageId) {
     const context = getContext();
     if (!context || !context.chat || !context.chat[messageId]) return;
 
     const message = context.chat[messageId];
+    if (message.is_user) return; // Не рисуем на сообщениях юзера
+
     const mesElement = document.querySelector(`.mes[mesid="${messageId}"]`);
     if (!mesElement) return;
+
+    // Подсвечиваем [транзишены] в рекапе
+    highlightRecapBrackets(mesElement);
 
     const rawText = message.mes || "";
 
@@ -48,7 +88,7 @@ async function renderMessageStats(messageId) {
     const rawModel = message.extra?.model || message.gen_model || (message.is_user ? "" : (message.extra?.api || ""));
     const modelName = cleanModelName(rawModel);
 
-    // 4. Кладем прямо внутрь .ch_name (под таймстампом и НАД линией, вообще не трогая кнопки "... ✏️"!)
+    // 4. Плашка в шапке
     let badge = mesElement.querySelector('.st-recap-meta-badge');
     if (!badge) {
         badge = document.createElement('div');
@@ -77,10 +117,8 @@ async function renderMessageStats(messageId) {
 function processVisibleMessages() {
     const mesElements = document.querySelectorAll('#chat .mes[mesid]');
     mesElements.forEach(el => {
-        if (!el.querySelector('.st-recap-meta-badge')) {
-            const id = Number(el.getAttribute('mesid'));
-            if (!isNaN(id)) renderMessageStats(id);
-        }
+        const id = Number(el.getAttribute('mesid'));
+        if (!isNaN(id)) renderMessageStats(id);
     });
 }
 
