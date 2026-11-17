@@ -48,22 +48,16 @@ async function renderMessageStats(messageId) {
     const rawModel = message.extra?.model || message.gen_model || (message.is_user ? "" : (message.extra?.api || ""));
     const modelName = cleanModelName(rawModel);
 
-    // 4. Вставляем ВНУТРЬ левого блока (где лежит дата и "?"), ПЕРЕД кнопками "... ✏️"
+    // 4. Кладем прямо внутрь .ch_name (под таймстампом и НАД линией, вообще не трогая кнопки "... ✏️"!)
     let badge = mesElement.querySelector('.st-recap-meta-badge');
     if (!badge) {
-        badge = document.createElement('span');
+        badge = document.createElement('div');
         badge.className = 'st-recap-meta-badge';
 
         const chName = mesElement.querySelector('.ch_name');
         if (!chName) return;
 
-        const timestamp = chName.querySelector('.timestamp');
-        // Берем родительский блок самой даты (левая половина шапки), чтобы не задеть кнопки "... ✏️" справа
-        const leftHeaderBlock = (timestamp && timestamp.parentElement)
-            ? timestamp.parentElement
-            : (chName.querySelector('.alignItemsBaseline') || chName);
-
-        leftHeaderBlock.insertAdjacentElement('beforeend', badge);
+        chName.insertAdjacentElement('beforeend', badge);
     }
 
     let parts = [];
@@ -74,7 +68,7 @@ async function renderMessageStats(messageId) {
     }
 
     if (modelName) {
-        parts.push(`<span class="st-recap-meta-model" title="${rawModel}">${modelName}</span>`);
+        parts.push(`<span title="${rawModel}">${modelName}</span>`);
     }
 
     badge.innerHTML = `<span style="opacity:0.5;">·</span> ` + parts.join(` <span style="opacity:0.5;">·</span> `);
@@ -85,4 +79,10 @@ function processVisibleMessages() {
     mesElements.forEach(el => {
         if (!el.querySelector('.st-recap-meta-badge')) {
             const id = Number(el.getAttribute('mesid'));
-            if (!isN
+            if (!isNaN(id)) renderMessageStats(id);
+        }
+    });
+}
+
+jQuery(() => {
+    eventSource.on(event_types.CHAT_CHANGED, () => setTimeout(processVi
