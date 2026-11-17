@@ -7,6 +7,28 @@ function cleanModelName(model) {
     return String(model).split('/').pop();
 }
 
+// 💎 Переключает все мыльные миниатюры аватарок и персон на 100% оригиналы без сжатия!
+function upgradeAvatarsToFullRes() {
+    document.querySelectorAll('img[src*="thumbnail?type=avatar"]').forEach(img => {
+        try {
+            const url = new URL(img.src, window.location.origin);
+            const file = url.searchParams.get('file');
+            if (file) {
+                img.src = `/characters/${encodeURIComponent(file)}`;
+            }
+        } catch (e) {}
+    });
+    document.querySelectorAll('img[src*="thumbnail?type=persona"]').forEach(img => {
+        try {
+            const url = new URL(img.src, window.location.origin);
+            const file = url.searchParams.get('file');
+            if (file) {
+                img.src = `/User Avatars/${encodeURIComponent(file)}`;
+            }
+        } catch (e) {}
+    });
+}
+
 // Оборачивает [транзишены в скобках] внутри рекапа в красивую бледную плашку
 function highlightRecapBrackets(mesElement) {
     const detailsList = mesElement.querySelectorAll('.mes_text details');
@@ -52,14 +74,14 @@ async function renderMessageStats(messageId) {
     const mesElement = document.querySelector(`.mes[mesid="${messageId}"]`);
     if (!mesElement) return;
 
-    // Подсвечиваем [транзишены] в рекапе
     highlightRecapBrackets(mesElement);
+    upgradeAvatarsToFullRes();
 
     const rawText = message.mes || "";
 
     // 1. Общее количество токенов
     let totalTokens = message.extra?.token_count;
-    if (!totalTokens) {
+    if (!totalTokens || totalTokens <= 2) {
         try {
             totalTokens = await getTokenCountAsync(rawText);
         } catch {
@@ -115,19 +137,36 @@ async function renderMessageStats(messageId) {
 }
 
 function processVisibleMessages() {
+    upgradeAvatarsToFullRes();
     const mesElements = document.querySelectorAll('#chat .mes[mesid]');
     mesElements.forEach(el => {
-        const id = Number(el.getAttribute('mesid'));
-        if (!isNaN(id)) renderMessageStats(id);
+        if (!el.querySelector('.st-recap-meta-badge')) {
+            const id = Number(el.getAttribute('mesid'));
+            if (!isNaN(id)) renderMessageStats(id);
+        }
     });
 }
 
 jQuery(() => {
     eventSource.on(event_types.CHAT_CHANGED, () => setTimeout(processVisibleMessages, 300));
-    eventSource.on(event_types.MESSAGE_RECEIVED, (id) => setTimeout(() => renderMessageStats(id), 150));
-    eventSource.on(event_types.MESSAGE_UPDATED, (id) => setTimeout(() => renderMessageStats(id), 150));
-    eventSource.on(event_types.MESSAGE_SWIPED, (id) => setTimeout(() => renderMessageStats(id), 150));
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (id) => setTimeout(() => renderMessageStats(id), 150));
+    eventSource.on(event_types.MESSAGE_RECEIVED, (id) => setTimeout(() => renderMessageStats(id), 500));
+    eventSource.on(event_types.MESSAGE_UPDATED, (id) => setTimeout(() => renderMessageStats(id), 300));
+    eventSource.on(event_types.MESSAGE_SWIPED, (id) => setTimeout(() => renderMessageStats(id), 300));
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (id) => setTimeout(() => renderMessageStats(id), 600));
+    if (event_types.GENERATION_ENDED) {
+        eventSource.on(event_types.GENERATION_ENDED, () => {
+            const context = getContext();
+            if (context && context.chat && context.chat.length > 0) {
+                setTimeout(() => renderMessageStats(context.chat.length - 1), 400);
+            }
+        });
+    }
+
+    // Следим за всем интерфейсом, чтобы и в правой панели персонажей сразу включались HD-аватарки!
+    const bodyObserver = new MutationObserver(() => {
+        upgradeAvatarsToFullRes();
+    });
+    bodyObserver.observe(document.body, { childList: true, subtree: true });
 
     const chatEl = document.getElementById('chat');
     if (chatEl) {
@@ -137,5 +176,5 @@ jQuery(() => {
         observer.observe(chatEl, { childList: true });
     }
 
-    setTimeout(processVisibleMessages, 1000);
+    setTimeout(processVisibleMessages, 800);
 });
