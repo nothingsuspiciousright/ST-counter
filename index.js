@@ -57,195 +57,299 @@ function highlightRecapBrackets(mesElement) {
 }
 
 // 2. Форматирование переходов, дневников и записок
+
 function formatMainTextTransitions(mesElement) {
     const mesText = mesElement.querySelector('.mes_text');
     if (!mesText) return;
 
-    const TRANSITION_KEYS =
-        "TIMESKIP|DATE CHANGE|TIME OF DAY CHANGE|" +
-        "WEATHER CHANGE|LOCATION CHANGE|POV CHANGE|" +
-        "INTERLUDE|MEANWHILE|FLASHBACK|DREAM|MEMORY|" +
-        "DISPLAY|WORLDBUILDING|RUMOR|NEWS|FORESHADOW|" +
-        "SPECULATION|FACTS|TRIVIA|DIARY|NOTE|LETTER";
+    // Supports transitions split across DOM elements,
+    // including <q>, <em>, <strong>, and Gemini U+2800 spaces.
+
+    const KEYS = [
+        'TIMESKIP', 'DATE CHANGE', 'TIME OF DAY CHANGE',
+        'WEATHER CHANGE', 'LOCATION CHANGE', 'POV CHANGE',
+        'INTERLUDE', 'MEANWHILE', 'FLASHBACK', 'DREAM',
+        'MEMORY', 'DISPLAY', 'WORLDBUILDING', 'RUMOR',
+        'NEWS', 'FORESHADOW', 'SPECULATION', 'FACTS',
+        'TRIVIA', 'DIARY', 'NOTE', 'LETTER'
+    ];
+
+    const keyPattern = KEYS
+        .sort((a, b) => b.length - a.length)
+        .join('|');
+
+    const transitionPattern = new RegExp(
+        `\\[\\s*(${keyPattern})\\s*(?:[-–—:]\\s*([^\\]\\r\\n]{1,250}))?\\]`,
+        'gi'
+    );
+
+    const paperPattern =
+        /\{(?:diary|letter)\|[^}\r\n]+\}|\{note\s+[^}\r\n]+\}/gi;
+
+    const protectedSelector =
+        'details, pre, code, .st-scene-divider, .st-paper-card';
+
+    const scopes = new Map();
 
     const walker = document.createTreeWalker(
         mesText,
         NodeFilter.SHOW_TEXT,
         {
             acceptNode(node) {
-                if (!node.parentElement) {
-                    return NodeFilter.FILTER_REJECT;
-                }
-
                 if (
-                    node.parentElement.closest(
-                        'details, pre, code, .st-scene-divider, .st-paper-card'
-                    )
+                    !node.parentElement ||
+                    node.parentElement.closest(protectedSelector)
                 ) {
                     return NodeFilter.FILTER_REJECT;
                 }
-
-                // Поддержка обычных пробелов и U+2800 от Gemini
-                if (
-                    /\[[A-Z\s\u2800]+|\{(?:diary|letter|note)/i.test(
-                        node.nodeValue
-                    )
-                ) {
-                    return NodeFilter.FILTER_ACCEPT;
-                }
-
-                return NodeFilter.FILTER_SKIP;
+                return NodeFilter.FILTER_ACCEPT;
             }
         }
     );
 
-    const nodesToProcess = [];
-    let current;
+    let node;
 
-    while ((current = walker.nextNode())) {
-        nodesToProcess.push(current);
+    while ((node = walker.nextNode())) {
+        const parent = node.parentElement;
+
+        const scope =
+            parent.closest('p, li, blockquote') ||
+            parent.closest('section, article, ru, div') ||
+            mesText;
+
+        if (!scopes.has(scope)) {
+            scopes.set(scope, []);
+        }
+
+        scopes.get(scope).push(node);
     }
 
-    const transRegex = new RegExp(
-        `(\\[(?:${TRANSITION_KEYS})\\]?\\s*[-–—:]\\s*END\\]|\\[(?:${TRANSITION_KEYS})\\s*[-–—:]\\s*[^\\]]+\\]|\\[(?:${TRANSITION_KEYS})\\]|\\{(?:diary|letter)\\|[^}]+\\}|\\{note\\s+[^}]+\\})`,
-        "gi"
-    );
+    function createTransition(type, description) {
+        const el = document.createElement('div');
+        el.className = 'st-scene-divider';
 
-    nodesToProcess.forEach(textNode => {
-        // FIX: Gemini использует U+2800 вместо пробелов.
-        // Нормализуем только содержимое квадратных скобок.
-        // Обычный литературный текст не затрагиваем.
-        const text = textNode.nodeValue.replace(
-            /\[[^\]\r\n]*\]/g,
-            tag => tag.replace(/\u2800/g, ' ')
-        );
+        const inner = document.createElement('span');
 
-        transRegex.lastIndex = 0;
+        if (
+            description &&
+            description.trim().toUpperCase() === 'END'
+        ) {
+            el.classList.add('st-scene-end');
+            inner.textContent = '✦';
+        } else {
+            inner.append('✦ ');
 
-        if (!transRegex.test(text)) return;
+            const showType = ![
+                'TIMESKIP',
+                'LOCATION CHANGE',
+                'TIME OF DAY CHANGE',
+                'DATE CHANGE',
+                'WEATHER CHANGE'
+            ].includes(type) || !description;
 
-        transRegex.lastIndex = 0;
+            if (showType) {
+                const label = document.createElement('span');
+                label.className = 'st-trans-tag';
+                label.textContent = description
+                    ? `${type} ·`
+                    : type;
 
-        const frag = document.createDocumentFragment();
-        const parts = text.split(transRegex);
+                inner.appendChild(label);
 
-        parts.forEach(part => {
-            if (!part) return;
-
-            const trimmed = part.trim();
-
-            // А) Закрывающий тег [MEANWHILE - END]
-            if (/^\[.*[-–—:]\s*END\]$/i.test(trimmed)) {
-                const div = document.createElement('div');
-                div.className = 'st-scene-divider st-scene-end';
-                div.innerHTML = `<span>✦</span>`;
-                frag.appendChild(div);
+                if (description) {
+                    inner.append(' ');
+                }
             }
 
-            // Б) Открывающий переход [TYPE - описание]
-            else if (
-                /^\[([A-Z\s]+?)\s*[-–—:]\s*([^\]]+)\]$/i.test(trimmed)
-            ) {
-                const m = trimmed.match(
-                    /^\[([A-Z\s]+?)\s*[-–—:]\s*([^\]]+)\]$/i
+            if (description) {
+                inner.append(
+                    document.createTextNode(description.trim())
                 );
-
-                const type = m[1].trim().toUpperCase();
-                const desc = m[2].trim();
-
-                const div = document.createElement('div');
-                div.className = 'st-scene-divider';
-
-                const showTypeTag = ![
-                    'TIMESKIP',
-                    'LOCATION CHANGE',
-                    'TIME OF DAY CHANGE',
-                    'DATE CHANGE',
-                    'WEATHER CHANGE'
-                ].includes(type);
-
-                const tagHtml = showTypeTag
-                    ? `<span class="st-trans-tag">${type} ·</span>`
-                    : '';
-
-                div.innerHTML = `<span>✦ ${tagHtml}${desc} ✦</span>`;
-                frag.appendChild(div);
             }
 
-            // В) Одиночный переход [FLASHBACK]
-            else if (
-                new RegExp(`^\\[(${TRANSITION_KEYS})\\]$`, 'i')
-                    .test(trimmed)
-            ) {
-                const label = trimmed.slice(1, -1).trim();
+            inner.append(' ✦');
+        }
+
+        el.appendChild(inner);
+        return el;
+    }
+
+    function createPaper(token) {
+        const isNote = /^\{note\s/i.test(token);
+
+        const card = document.createElement('div');
+        card.className = 'st-paper-card';
+
+        if (isNote) {
+            const body = document.createElement('div');
+            body.className = 'st-paper-body';
+
+            body.textContent =
+                '✦ ' +
+                token.slice(1, -1)
+                    .replace(/^note\s+/i, '')
+                    .trim();
+
+            card.appendChild(body);
+        } else {
+            const fields = token
+                .slice(1, -1)
+                .split('|')
+                .slice(1)
+                .map(s => s.trim());
+
+            const [
+                date = '',
+                content = '',
+                loc = '',
+                sign = ''
+            ] = fields;
+
+            const header = document.createElement('div');
+            header.className = 'st-paper-header';
+
+            const left = document.createElement('span');
+            left.textContent = `✦ ${date}`;
+
+            const right = document.createElement('span');
+            right.textContent = loc;
+
+            header.append(left, right);
+
+            const body = document.createElement('div');
+            body.className = 'st-paper-body';
+            body.textContent = content;
+
+            card.append(header, body);
+
+            if (sign) {
+                const signature = document.createElement('div');
+                signature.className = 'st-paper-sign';
+                signature.textContent = `— ${sign}`;
+                card.appendChild(signature);
+            }
+        }
+
+        return card;
+    }
+
+    for (const [scope, nodes] of scopes) {
+        const originalText = nodes
+            .map(n => n.nodeValue)
+            .join('');
+
+        if (
+            !originalText.includes('[') &&
+            !originalText.includes('{')
+        ) {
+            continue;
+        }
+
+        // Replace Braille blanks only in the parser's copy.
+        // Character offsets remain aligned with original nodes.
+        const text = originalText.replace(/\u2800/g, ' ');
+        const matches = [];
+
+        transitionPattern.lastIndex = 0;
+
+        for (const m of text.matchAll(transitionPattern)) {
+            const type = m[1]
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toUpperCase();
+
+            const description = m[2] ? m[2].trim() : '';
+
+            matches.push({
+                start: m.index,
+                end: m.index + m[0].length,
+
+                element:
+                    ['DIARY', 'NOTE', 'LETTER'].includes(type) &&
+                    !description
+                        ? null
+                        : createTransition(type, description)
+            });
+        }
+
+        paperPattern.lastIndex = 0;
+
+        for (const m of text.matchAll(paperPattern)) {
+            matches.push({
+                start: m.index,
+                end: m.index + m[0].length,
+                element: createPaper(m[0])
+            });
+        }
+
+        if (!matches.length) continue;
+
+        // Process backwards to preserve source offsets.
+        matches.sort((a, b) => b.start - a.start);
+
+        function locate(offset, endBoundary) {
+            let cursor = 0;
+
+            for (let i = 0; i < nodes.length; i++) {
+                const length = nodes[i].nodeValue.length;
 
                 if (
-                    ['DIARY', 'NOTE', 'LETTER']
-                        .includes(label.toUpperCase())
+                    offset < cursor + length ||
+                    (endBoundary && offset === cursor + length)
                 ) {
-                    return;
+                    return {
+                        node: nodes[i],
+                        offset: offset - cursor
+                    };
                 }
 
-                const div = document.createElement('div');
-                div.className = 'st-scene-divider';
-
-                div.innerHTML =
-                    `<span>✦ <span class="st-trans-tag">${label}</span> ✦</span>`;
-
-                frag.appendChild(div);
+                cursor += length;
             }
 
-            // Г) Дневник или письмо
-            else if (/^\{(diary|letter)\|([^}]+)\}$/i.test(trimmed)) {
-                const m = trimmed.match(
-                    /^\{(diary|letter)\|([^}]+)\}$/i
-                );
+            const last = nodes[nodes.length - 1];
 
-                const fields = m[2].split('|').map(s => s.trim());
-                const [
-                    date = '',
-                    content = '',
-                    loc = '',
-                    sign = ''
-                ] = fields;
+            return {
+                node: last,
+                offset: last.nodeValue.length
+            };
+        }
 
-                const card = document.createElement('div');
-                card.className = 'st-paper-card';
+        for (const match of matches) {
+            const from = locate(match.start, false);
+            const to = locate(match.end, true);
 
-                card.innerHTML = `
-                    <div class="st-paper-header">
-                        <span>✦ ${date}</span>
-                        <span>${loc}</span>
-                    </div>
-                    <div class="st-paper-body">${content}</div>
-                    ${sign ? `<div class="st-paper-sign">— ${sign}</div>` : ''}
-                `;
-
-                frag.appendChild(card);
+            if (
+                !from.node.isConnected ||
+                !to.node.isConnected
+            ) {
+                continue;
             }
 
-            // Д) Записка
-            else if (/^\{note\s+([^}]+)\}$/i.test(trimmed)) {
-                const m = trimmed.match(
-                    /^\{note\s+([^}]+)\}$/i
-                );
+            const range = document.createRange();
 
-                const card = document.createElement('div');
-                card.className = 'st-paper-card';
+            range.setStart(from.node, from.offset);
+            range.setEnd(to.node, to.offset);
 
-                card.innerHTML =
-                    `<div class="st-paper-body">✦ ${m[1].trim()}</div>`;
-
-                frag.appendChild(card);
+            // Replace entire paragraphs cleanly.
+            if (
+                match.element &&
+                scope.tagName === 'P' &&
+                text.trim() === text
+                    .slice(match.start, match.end)
+                    .trim()
+            ) {
+                scope.replaceWith(match.element);
+                break;
             }
 
-            else {
-                frag.appendChild(document.createTextNode(part));
-            }
-        });
+            // Works across <q>, <em>, and other inline nodes.
+            range.deleteContents();
 
-        textNode.parentNode.replaceChild(frag, textNode);
-    });
+            if (match.element) {
+                range.insertNode(match.element);
+            }
+        }
+    }
 }
 
 // 3. Счётчик токенов, рекапа и модель
