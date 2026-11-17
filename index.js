@@ -7,7 +7,7 @@ function cleanModelName(model) {
     return String(model).split('/').pop();
 }
 
-// Оборачивает [транзишены в скобках] внутри рекапа в красивую бледную плашку
+// 1. Внутри рекапа <details> подсвечивает [транзишены] аккуратными бледными рамочками
 function highlightRecapBrackets(mesElement) {
     const detailsList = mesElement.querySelectorAll('.mes_text details');
     detailsList.forEach(details => {
@@ -42,17 +42,130 @@ function highlightRecapBrackets(mesElement) {
     });
 }
 
+// 2. В основном тексте превращает все [TIMESKIP - ...], [MEANWHILE - END], {diary|...}, {note ...} в красивые разделители и карточки!
+function formatMainTextTransitions(mesElement) {
+    const mesText = mesElement.querySelector('.mes_text');
+    if (!mesText || mesText.dataset.transitionsFormatted === "true") return;
+
+    const TRANSITION_KEYS = "TIMESKIP|DATE CHANGE|TIME OF DAY CHANGE|WEATHER CHANGE|LOCATION CHANGE|POV CHANGE|INTERLUDE|MEANWHILE|FLASHBACK|DREAM|MEMORY|DISPLAY|WORLDBUILDING|RUMOR|NEWS|FORESHADOW|SPECULATION|FACTS|TRIVIA|DIARY|NOTE|LETTER";
+
+    // Проходим по параграфам и контейнерам вне <details> и вне <pre>
+    const walker = document.createTreeWalker(mesText, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+            if (!node.parentElement) return NodeFilter.FILTER_REJECT;
+            if (node.parentElement.closest('details, pre, code, .st-scene-divider, .st-paper-card')) {
+                return NodeFilter.FILTER_REJECT;
+            }
+            if (/\[[A-Z\s]+|\{(?:diary|letter|note)/i.test(node.nodeValue)) {
+                return NodeFilter.FILTER_ACCEPT;
+            }
+            return NodeFilter.FILTER_SKIP;
+        }
+    });
+
+    const nodesToProcess = [];
+    let current;
+    while ((current = walker.nextNode())) {
+        nodesToProcess.push(current);
+    }
+
+    const transRegex = new RegExp(
+        `(\\[(?:${TRANSITION_KEYS})\\]?\\s*[-—:]\\s*END\\]|\\[(?:${TRANSITION_KEYS})\\s*[-—:]\\s*[^\\]]+\\]|\\[(?:${TRANSITION_KEYS})\\]|\\{(?:diary|letter)\\|[^}]+\\}|\\{note\\s+[^}]+\\})`,
+        "gi"
+    );
+
+    nodesToProcess.forEach(textNode => {
+        const text = textNode.nodeValue;
+        if (!transRegex.test(text)) return;
+        transRegex.lastIndex = 0;
+
+        const frag = document.createDocumentFragment();
+        const parts = text.split(transRegex);
+
+        parts.forEach(part => {
+            if (!part) return;
+            const trimmed = part.trim();
+
+            // А) Закрывающий тег [... - END]
+            if (/^\[.*[-—:]\s*END\]$/i.test(trimmed)) {
+                const div = document.createElement('div');
+                div.className = 'st-scene-divider st-scene-end';
+                div.innerHTML = `<span>✦</span>`;
+                frag.appendChild(div);
+            }
+            // Б) Открывающий переход с текстом [TYPE - описание]
+            else if (/^\[([A-Z\s]+?)\s*[-—:]\s*([^\]]+)\]$/i.test(trimmed)) {
+                const m = trimmed.match(/^\[([A-Z\s]+?)\s*[-—:]\s*([^\]]+)\]$/i);
+                const type = m[1].trim().toUpperCase();
+                const desc = m[2].trim();
+                const div = document.createElement('div');
+                div.className = 'st-scene-divider';
+                // Для специальных сцен (FLASHBACK, DREAM, MEMORY, RUMOR, NEWS и т.д.) оставляем маленькую пометку типа
+                const showTypeTag = !['TIMESKIP', 'LOCATION CHANGE', 'TIME OF DAY CHANGE', 'DATE CHANGE', 'WEATHER CHANGE'].includes(type);
+                const tagHtml = showTypeTag ? `<span class="st-trans-tag">${type} ·</span>` : '';
+                div.innerHTML = `<span>✦ ${tagHtml}${desc} ✦</span>`;
+                frag.appendChild(div);
+            }
+            // В) Одиночный тег [WORLDBUILDING], [RUMOR], [FACTS] и т.д.
+            else if (new RegExp(`^\\[(${TRANSITION_KEYS})\\]$`, 'i').test(trimmed)) {
+                const label = trimmed.slice(1, -1).trim();
+                // Если это просто техническая метка [DIARY], [NOTE], [LETTER] перед фигурной скобкой — прячем её, чтобы не дублировать карточку
+                if (['DIARY', 'NOTE', 'LETTER'].includes(label.toUpperCase())) {
+                    return;
+                }
+                const div = document.createElement('div');
+                div.className = 'st-scene-divider';
+                div.innerHTML = `<span>✦ <span class="st-trans-tag">${label}</span> ✦</span>`;
+                frag.appendChild(div);
+            }
+            // Г) Дневник или письмо: {diary|date|content|location|signature}
+            else if (/^\{(diary|letter)\|([^}]+)\}$/i.test(trimmed)) {
+                const m = trimmed.match(/^\{(diary|letter)\|([^}]+)\}$/i);
+                const fields = m[2].split('|').map(s => s.trim());
+                const [date = '', content = '', loc = '', sign = ''] = fields;
+                const card = document.createElement('div');
+                card.className = 'st-paper-card';
+                card.innerHTML = `
+                    <div class="st-paper-header">
+                        <span>✦ ${date}</span>
+                        <span>${loc}</span>
+                    </div>
+                    <div class="st-paper-body">${content}</div>
+                    ${sign ? `<div class="st-paper-sign">— ${sign}</div>` : ''}
+                `;
+                frag.appendChild(card);
+            }
+            // Д) Записка: {note Текст записки}
+            else if (/^\{note\s+([^}]+)\}$/i.test(trimmed)) {
+                const m = trimmed.match(/^\{note\s+([^}]+)\}$/i);
+                const card = document.createElement('div');
+                card.className = 'st-paper-card';
+                card.innerHTML = `<div class="st-paper-body">✦ ${m[1].trim()}</div>`;
+                frag.appendChild(card);
+            }
+            else {
+                frag.appendChild(document.createTextNode(part));
+            }
+        });
+
+        textNode.parentNode.replaceChild(frag, textNode);
+    });
+
+    mesText.dataset.transitionsFormatted = "true";
+}
+
 async function renderMessageStats(messageId) {
     const context = getContext();
     if (!context || !context.chat || !context.chat[messageId]) return;
 
     const message = context.chat[messageId];
-    if (message.is_user) return; // Не рисуем на сообщениях юзера
+    if (message.is_user) return;
 
     const mesElement = document.querySelector(`.mes[mesid="${messageId}"]`);
     if (!mesElement) return;
 
     highlightRecapBrackets(mesElement);
+    formatMainTextTransitions(mesElement);
 
     const rawText = message.mes || "";
 
