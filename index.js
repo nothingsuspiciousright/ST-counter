@@ -56,22 +56,38 @@ function highlightRecapBrackets(mesElement) {
     });
 }
 
-// 2. Форматирование переходов, дневников и записок
-
+// 2. Транзишены в основном тексте
 function formatMainTextTransitions(mesElement) {
     const mesText = mesElement.querySelector('.mes_text');
     if (!mesText) return;
 
-    // Supports transitions split across DOM elements,
-    // including <q>, <em>, <strong>, and Gemini U+2800 spaces.
+    // Транзишены могут быть разбиты HTML-разметкой на
+    // несколько текстовых узлов.
+    // Пробел U+2800 тоже поддерживается.
 
     const KEYS = [
-        'TIMESKIP', 'DATE CHANGE', 'TIME OF DAY CHANGE',
-        'WEATHER CHANGE', 'LOCATION CHANGE', 'POV CHANGE',
-        'INTERLUDE', 'MEANWHILE', 'FLASHBACK', 'DREAM',
-        'MEMORY', 'DISPLAY', 'WORLDBUILDING', 'RUMOR',
-        'NEWS', 'FORESHADOW', 'SPECULATION', 'FACTS',
-        'TRIVIA', 'DIARY', 'NOTE', 'LETTER'
+        'TIMESKIP',
+        'DATE CHANGE',
+        'TIME OF DAY CHANGE',
+        'WEATHER CHANGE',
+        'LOCATION CHANGE',
+        'POV CHANGE',
+        'INTERLUDE',
+        'MEANWHILE',
+        'FLASHBACK',
+        'DREAM',
+        'MEMORY',
+        'DISPLAY',
+        'WORLDBUILDING',
+        'RUMOR',
+        'NEWS',
+        'FORESHADOW',
+        'SPECULATION',
+        'FACTS',
+        'TRIVIA',
+        'DIARY',
+        'NOTE',
+        'LETTER'
     ];
 
     const keyPattern = KEYS
@@ -86,8 +102,20 @@ function formatMainTextTransitions(mesElement) {
     const paperPattern =
         /\{(?:diary|letter)\|[^}\r\n]+\}|\{note\s+[^}\r\n]+\}/gi;
 
+    // НОВОЕ:
+    // Произвольные заголовки сцен в квадратных скобках.
+    // Например:
+    // [День выпуска и распределения по командам]
+    //
+    // Скобки должны занимать отдельную строку.
+
+    const sceneTitlePattern =
+        /^[ \t]*\[([^\[\]\r\n]{2,180})\][ \t]*\r?$/gm;
+
     const protectedSelector =
         'details, pre, code, .st-scene-divider, .st-paper-card';
+
+    // Разделяем сообщение на логические текстовые области.
 
     const scopes = new Map();
 
@@ -102,6 +130,7 @@ function formatMainTextTransitions(mesElement) {
                 ) {
                     return NodeFilter.FILTER_REJECT;
                 }
+
                 return NodeFilter.FILTER_ACCEPT;
             }
         }
@@ -124,6 +153,8 @@ function formatMainTextTransitions(mesElement) {
         scopes.get(scope).push(node);
     }
 
+    // Создание красивого разделителя
+
     function createTransition(type, description) {
         const el = document.createElement('div');
         el.className = 'st-scene-divider';
@@ -144,12 +175,14 @@ function formatMainTextTransitions(mesElement) {
                 'LOCATION CHANGE',
                 'TIME OF DAY CHANGE',
                 'DATE CHANGE',
-                'WEATHER CHANGE'
+                'WEATHER CHANGE',
+                'SCENE'
             ].includes(type) || !description;
 
             if (showType) {
                 const label = document.createElement('span');
                 label.className = 'st-trans-tag';
+
                 label.textContent = description
                     ? `${type} ·`
                     : type;
@@ -174,6 +207,8 @@ function formatMainTextTransitions(mesElement) {
         return el;
     }
 
+    // Оформление дневников, писем и записок
+
     function createPaper(token) {
         const isNote = /^\{note\s/i.test(token);
 
@@ -185,10 +220,9 @@ function formatMainTextTransitions(mesElement) {
             body.className = 'st-paper-body';
 
             body.textContent =
-                '✦ ' +
-                token.slice(1, -1)
+                `✦ ${token.slice(1, -1)
                     .replace(/^note\s+/i, '')
-                    .trim();
+                    .trim()}`;
 
             card.appendChild(body);
         } else {
@@ -225,6 +259,7 @@ function formatMainTextTransitions(mesElement) {
             if (sign) {
                 const signature = document.createElement('div');
                 signature.className = 'st-paper-sign';
+
                 signature.textContent = `— ${sign}`;
                 card.appendChild(signature);
             }
@@ -232,6 +267,8 @@ function formatMainTextTransitions(mesElement) {
 
         return card;
     }
+
+    // Обработка всех текстовых областей сообщения
 
     for (const [scope, nodes] of scopes) {
         const originalText = nodes
@@ -245,10 +282,14 @@ function formatMainTextTransitions(mesElement) {
             continue;
         }
 
-        // Replace Braille blanks only in the parser's copy.
-        // Character offsets remain aligned with original nodes.
+        // Нормализация U+2800 только для поиска.
+        // Исходный текст сообщения не меняется.
+
         const text = originalText.replace(/\u2800/g, ' ');
+
         const matches = [];
+
+        // Существующие именованные транзишены
 
         transitionPattern.lastIndex = 0;
 
@@ -258,12 +299,13 @@ function formatMainTextTransitions(mesElement) {
                 .trim()
                 .toUpperCase();
 
-            const description = m[2] ? m[2].trim() : '';
+            const description = m[2]
+                ? m[2].trim()
+                : '';
 
             matches.push({
                 start: m.index,
                 end: m.index + m[0].length,
-
                 element:
                     ['DIARY', 'NOTE', 'LETTER'].includes(type) &&
                     !description
@@ -271,6 +313,8 @@ function formatMainTextTransitions(mesElement) {
                         : createTransition(type, description)
             });
         }
+
+        // Дневники, записки и письма
 
         paperPattern.lastIndex = 0;
 
@@ -282,10 +326,53 @@ function formatMainTextTransitions(mesElement) {
             });
         }
 
+        // НОВОЕ:
+        // Произвольные [заголовки сцен].
+        //
+        // Работает и для сообщений пользователя.
+        // Не перехватывает уже найденные переходы.
+
+        sceneTitlePattern.lastIndex = 0;
+
+        for (const m of text.matchAll(sceneTitlePattern)) {
+            const title = m[1].trim();
+
+            if (
+                !/[\p{L}]/u.test(title) ||
+                /^(?:x| |-|PASS|WARN|N\/A)$/i.test(title)
+            ) {
+                continue;
+            }
+
+            const start =
+                m.index + m[0].indexOf('[');
+
+            const end =
+                m.index + m[0].lastIndexOf(']') + 1;
+
+            // Защита от двойного оформления
+
+            if (
+                matches.some(existing =>
+                    start < existing.end &&
+                    end > existing.start
+                )
+            ) {
+                continue;
+            }
+
+            matches.push({
+                start,
+                end,
+                element: createTransition('SCENE', title)
+            });
+        }
+
         if (!matches.length) continue;
 
-        // Process backwards to preserve source offsets.
         matches.sort((a, b) => b.start - a.start);
+
+        // Поиск позиции символа среди текстовых узлов
 
         function locate(offset, endBoundary) {
             let cursor = 0;
@@ -295,7 +382,10 @@ function formatMainTextTransitions(mesElement) {
 
                 if (
                     offset < cursor + length ||
-                    (endBoundary && offset === cursor + length)
+                    (
+                        endBoundary &&
+                        offset === cursor + length
+                    )
                 ) {
                     return {
                         node: nodes[i],
@@ -314,6 +404,8 @@ function formatMainTextTransitions(mesElement) {
             };
         }
 
+        // Замены справа налево
+
         for (const match of matches) {
             const from = locate(match.start, false);
             const to = locate(match.end, true);
@@ -330,19 +422,19 @@ function formatMainTextTransitions(mesElement) {
             range.setStart(from.node, from.offset);
             range.setEnd(to.node, to.offset);
 
-            // Replace entire paragraphs cleanly.
+            // Если весь абзац состоит из перехода,
+            // заменяем абзац целиком.
+
             if (
                 match.element &&
                 scope.tagName === 'P' &&
-                text.trim() === text
-                    .slice(match.start, match.end)
-                    .trim()
+                text.trim() ===
+                    text.slice(match.start, match.end).trim()
             ) {
                 scope.replaceWith(match.element);
                 break;
             }
 
-            // Works across <q>, <em>, and other inline nodes.
             range.deleteContents();
 
             if (match.element) {
@@ -352,7 +444,8 @@ function formatMainTextTransitions(mesElement) {
     }
 }
 
-// 3. Счётчик токенов, рекапа и модель
+// 3. Счётчик токенов и статистика сообщений
+
 async function renderMessageStats(messageId) {
     const context = getContext();
 
@@ -360,10 +453,11 @@ async function renderMessageStats(messageId) {
         !context ||
         !context.chat ||
         !context.chat[messageId]
-    ) return;
+    ) {
+        return;
+    }
 
     const message = context.chat[messageId];
-    if (message.is_user) return;
 
     const mesElement = document.querySelector(
         `.mes[mesid="${messageId}"]`
@@ -371,12 +465,19 @@ async function renderMessageStats(messageId) {
 
     if (!mesElement) return;
 
+    // Оформление работает и для пользовательских сообщений
+
     highlightRecapBrackets(mesElement);
     formatMainTextTransitions(mesElement);
 
+    // Но токеновая статистика добавляется только AI
+
+    if (message.is_user) return;
+
     const rawText = message.mes || "";
 
-    // Общее количество токенов
+    // Общее число токенов
+
     let totalTokens = message.extra?.token_count;
 
     if (!totalTokens || totalTokens <= 2) {
@@ -387,7 +488,8 @@ async function renderMessageStats(messageId) {
         }
     }
 
-    // Рекап <en>...</en>
+    // Подсчёт токенов в recap
+
     const enRegex = /<en>([\s\S]*?)<\/en>/gi;
 
     let match;
@@ -412,14 +514,17 @@ async function renderMessageStats(messageId) {
     }
 
     // Название модели
+
     const rawModel =
         message.extra?.model ||
         message.gen_model ||
-        (message.is_user ? "" : (message.extra?.api || ""));
+        message.extra?.api ||
+        "";
 
     const modelName = cleanModelName(rawModel);
 
-    // Метаданные в шапке
+    // Статистика возле имени
+
     let badge = mesElement.querySelector(
         '.st-recap-meta-badge'
     );
@@ -429,12 +534,16 @@ async function renderMessageStats(messageId) {
         badge.className = 'st-recap-meta-badge';
 
         const chName = mesElement.querySelector('.ch_name');
+
         if (!chName) return;
 
-        chName.insertAdjacentElement('beforeend', badge);
+        chName.insertAdjacentElement(
+            'beforeend',
+            badge
+        );
     }
 
-    let parts = [];
+    const parts = [];
 
     if (recapTokens > 0) {
         parts.push(
@@ -457,20 +566,23 @@ async function renderMessageStats(messageId) {
         );
 }
 
-// 4. Повторная проверка видимых сообщений
+// 4. Оформление всех видимых сообщений
+
 function processVisibleMessages() {
-    const mesElements = document.querySelectorAll(
-        '#chat .mes[mesid]'
-    );
+    const mesElements =
+        document.querySelectorAll('#chat .mes[mesid]');
 
     mesElements.forEach(el => {
-        // FIX: Повторное форматирование транзишенов.
-        // Счётчик токенов не блокирует обработку.
+        // Обрабатываем сообщения независимо от того,
+        // добавлен ли уже счётчик токенов.
+
         highlightRecapBrackets(el);
         formatMainTextTransitions(el);
 
         if (!el.querySelector('.st-recap-meta-badge')) {
-            const id = Number(el.getAttribute('mesid'));
+            const id = Number(
+                el.getAttribute('mesid')
+            );
 
             if (!isNaN(id)) {
                 renderMessageStats(id);
@@ -479,7 +591,8 @@ function processVisibleMessages() {
     });
 }
 
-// 5. События SillyTavern
+// 5. Подключение к событиям SillyTavern
+
 jQuery(() => {
     eventSource.on(
         event_types.CHAT_CHANGED,
@@ -488,7 +601,7 @@ jQuery(() => {
 
     eventSource.on(
         event_types.MESSAGE_RECEIVED,
-        (id) => setTimeout(
+        id => setTimeout(
             () => renderMessageStats(id),
             500
         )
@@ -496,7 +609,7 @@ jQuery(() => {
 
     eventSource.on(
         event_types.MESSAGE_UPDATED,
-        (id) => setTimeout(
+        id => setTimeout(
             () => renderMessageStats(id),
             300
         )
@@ -504,7 +617,7 @@ jQuery(() => {
 
     eventSource.on(
         event_types.MESSAGE_SWIPED,
-        (id) => setTimeout(
+        id => setTimeout(
             () => renderMessageStats(id),
             300
         )
@@ -512,7 +625,7 @@ jQuery(() => {
 
     eventSource.on(
         event_types.CHARACTER_MESSAGE_RENDERED,
-        (id) => setTimeout(
+        id => setTimeout(
             () => renderMessageStats(id),
             600
         )
@@ -540,6 +653,8 @@ jQuery(() => {
         );
     }
 
+    // Обнаружение новых сообщений в DOM
+
     const chatEl = document.getElementById('chat');
 
     if (chatEl) {
@@ -551,6 +666,8 @@ jQuery(() => {
             childList: true
         });
     }
+
+    // Первоначальная обработка
 
     setTimeout(processVisibleMessages, 800);
 });
