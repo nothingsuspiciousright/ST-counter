@@ -56,11 +56,70 @@ function highlightRecapBrackets(mesElement) {
     });
 }
 
+function compactConsecutiveTransitions(mesText) {
+    if (!mesText) return;
+
+    const onlySpacing = node =>
+        node.nodeType === Node.TEXT_NODE
+            ? !node.nodeValue
+                .replace(/[\u2800\u200B\uFEFF]/g, '')
+                .trim()
+            : node.nodeType === Node.ELEMENT_NODE &&
+              node.tagName === 'BR';
+
+    // Убираем лишнюю обёртку абзаца,
+    // если внутри находится только переход.
+    for (const divider of mesText.querySelectorAll('.st-scene-divider')) {
+        const parent = divider.parentElement;
+
+        if (
+            parent?.tagName === 'P' &&
+            [...parent.childNodes].every(
+                n => n === divider || onlySpacing(n)
+            )
+        ) {
+            parent.replaceWith(divider);
+        }
+    }
+
+    // Сближаем только соседние переходы.
+    for (const divider of mesText.querySelectorAll('.st-scene-divider')) {
+        let cursor = divider.nextSibling;
+        const spacingNodes = [];
+
+        while (cursor && onlySpacing(cursor)) {
+            spacingNodes.push(cursor);
+            cursor = cursor.nextSibling;
+        }
+
+        if (
+            !(cursor instanceof Element) ||
+            !cursor.classList.contains('st-scene-divider')
+        ) {
+            continue;
+        }
+
+        for (const spacing of spacingNodes) {
+            spacing.remove();
+        }
+
+        divider.style.setProperty(
+            'margin-bottom', '4px', 'important'
+        );
+
+        cursor.style.setProperty(
+            'margin-top', '4px', 'important'
+        );
+    }
+}
+
 // 2. Транзишены в основном тексте
 function formatMainTextTransitions(mesElement) {
     const mesText = mesElement.querySelector('.mes_text');
     if (!mesText) return;
 
+    compactConsecutiveTransitions(mesText);
+    
     // Транзишены могут быть разбиты HTML-разметкой на
     // несколько текстовых узлов.
     // Пробел U+2800 тоже поддерживается.
