@@ -593,7 +593,152 @@ function processVisibleMessages() {
 
 // 5. Подключение к событиям SillyTavern
 
+
 jQuery(() => {
+    const chatEl = document.getElementById('chat');
+    const dirtyMessages = new Set();
+
+    const observerOptions = {
+        childList: true,
+        characterData: true,
+        subtree: true,
+    };
+
+    let observer = null;
+    let liveTimer = null;
+
+    // Живое оформление только изменённых сообщений.
+    function flushLiveFormatting() {
+        liveTimer = null;
+
+        if (!chatEl || !observer) return;
+
+        // Защита от бесконечной перерисовки.
+        observer.disconnect();
+
+        try {
+            for (const el of dirtyMessages) {
+                if (!el.isConnected) continue;
+
+                const mesText = el.querySelector('.mes_text');
+                if (!mesText) continue;
+
+                const text = mesText.textContent || '';
+
+                // Обрабатываем только завершённые маркеры.
+                if (
+                    text.includes(']') ||
+                    text.includes('}')
+                ) {
+                    formatMainTextTransitions(el);
+                }
+            }
+        } catch (error) {
+            console.warn(
+                '[ST Counter] Live transitions:',
+                error
+            );
+        } finally {
+            dirtyMessages.clear();
+
+            if (chatEl.isConnected) {
+                observer.observe(chatEl, observerOptions);
+            }
+        }
+    }
+
+    function queueMessage(el) {
+        if (
+            !el ||
+            !el.isConnected ||
+            !el.matches('.mes[mesid]')
+        ) return;
+
+        dirtyMessages.add(el);
+
+        if (liveTimer !== null) return;
+
+        // Не чаще одного обновления за 150 мс.
+        // Это важно для производительности Android.
+        liveTimer = setTimeout(
+            flushLiveFormatting,
+            150
+        );
+    }
+
+    if (chatEl) {
+        observer = new MutationObserver(records => {
+            for (const record of records) {
+                const target =
+                    record.target.nodeType === Node.TEXT_NODE
+                        ? record.target.parentElement
+                        : record.target;
+
+                if (!(target instanceof Element)) continue;
+
+                // Игнорируем элементы самого ST Counter.
+                if (target.closest(
+                    '.st-scene-divider, ' +
+                    '.st-paper-card, ' +
+                    '.st-recap-bracket, ' +
+                    '.st-recap-meta-badge'
+                )) {
+                    continue;
+                }
+
+                const mes = target.closest(
+                    '.mes[mesid]'
+                );
+
+                if (
+                    mes &&
+                    (
+                        target.closest('.mes_text') ||
+                        target === mes
+                    )
+                ) {
+                    queueMessage(mes);
+                }
+
+                // Новые сообщения в DOM.
+                if (record.type === 'childList') {
+                    for (const added of record.addedNodes) {
+                        if (!(added instanceof Element)) {
+                            continue;
+                        }
+
+                        if (added.matches('.mes[mesid]')) {
+                            queueMessage(added);
+                        } else {
+                            const wrapped = added.closest(
+                                '.mes[mesid]'
+                            );
+
+                            if (
+                                wrapped &&
+                                added.closest('.mes_text')
+                            ) {
+                                queueMessage(wrapped);
+                            }
+
+                            for (
+                                const child of added.querySelectorAll(
+                                    '.mes[mesid]'
+                                )
+                            ) {
+                                queueMessage(child);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        observer.observe(chatEl, observerOptions);
+    }
+
+    // Старые события SillyTavern сохраняются.
+
     eventSource.on(
         event_types.CHAT_CHANGED,
         () => setTimeout(processVisibleMessages, 300)
@@ -637,37 +782,26 @@ jQuery(() => {
             () => {
                 const context = getContext();
 
-                if (
-                    context &&
-                    context.chat &&
-                    context.chat.length > 0
-                ) {
-                    setTimeout(
-                        () => renderMessageStats(
-                            context.chat.length - 1
-                        ),
-                        400
-                    );
+                if (context?.chat?.length) {
+                    const id = context.chat.length - 1;
+
+                    setTimeout(() => {
+                        // Финальная проверка после генерации.
+                        renderMessageStats(id);
+
+                        const el = document.querySelector(
+                            `.mes[mesid="${id}"]`
+                        );
+
+                        if (el) {
+                            highlightRecapBrackets(el);
+                            formatMainTextTransitions(el);
+                        }
+                    }, 400);
                 }
             }
         );
     }
-
-    // Обнаружение новых сообщений в DOM
-
-    const chatEl = document.getElementById('chat');
-
-    if (chatEl) {
-        const observer = new MutationObserver(() => {
-            processVisibleMessages();
-        });
-
-        observer.observe(chatEl, {
-            childList: true
-        });
-    }
-
-    // Первоначальная обработка
 
     setTimeout(processVisibleMessages, 800);
 });
