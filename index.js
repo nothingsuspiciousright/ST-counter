@@ -14,7 +14,7 @@ function renderProfiles(){const sel=$('#mn-profile');if(!sel)return;sel.replaceC
   for(const p of mn.connectionProfiles())sel.append(mkOption(p.id,`${p.name} · ${p.model??p.api??''}`));sel.value=mn.settings().profileId??'';
 }
 function updateChat(){const s=mn.getStats(),v=$('#mn-overview');if(!v)return;
-  v.textContent=s?`Источников: ${s.sourceCount} · фактов: ${s.factCount} · фрагментов оригинала: ${s.chunkCount} · импортов: ${s.imports} · новых ответов до автообновления: ${Math.max(0,s.batchEvery-s.pending)} · ${s.valid?'целостность OK':'ОШИБКИ'}`:'Открой сохранённый чат для работы с памятью.';
+  v.textContent=s?`Источников: ${s.sourceCount} · фактов: ${s.factCount} · фрагментов оригинала: ${s.chunkCount} · импортов: ${s.imports} · заблокированных пакетов: ${s.blockedBatches} · новых ответов до автообновления: ${Math.max(0,s.batchEvery-s.pending)} · ${s.valid?'целостность OK':'ОШИБКИ'}`:'Открой сохранённый чат для работы с памятью.';
   renderOriginals();
   $('#mn-sync').textContent=s?.lastSync?`Снимок сервера: ${new Date(s.lastSync).toLocaleString()}`:'Резервная копия ещё не создана';
   $('#mn-injection').textContent=mn.injectionInfo()||'Память ещё не подставлялась в запрос';
@@ -145,7 +145,11 @@ async function initUI(){const container=document.querySelector('#extensions_sett
   bind('#mn-auto-backup','change',()=>{s.autoBackup=$('#mn-auto-backup').checked;mn.saveSettings();});
   bind('#mn-success-notifications','change',()=>{s.successNotifications=$('#mn-success-notifications').checked;mn.saveSettings();});
   bind('#mn-scan','click',async()=>{await mn.fullRescan({notify:true});updateChat();});
-  bind('#mn-extract','click',async()=>{status('Архивариус обрабатывает новые события…');const r=await mn.processBacklog({force:true});status(`Готово: ${r.batches} пачек, ${r.facts} фактов`);updateChat();});
+  bind('#mn-extract','click',async()=>{status('Архивариус обрабатывает новые события…');const r=await mn.processBacklog({force:true});status(`Готово: ${r.batches} пакетов, +${r.facts} фактов, заблокировано ${r.blocked??0}. Пропуски не считаются извлечёнными фактами.`);updateChat();});
+  bind('#mn-skip-failed','click',async()=>{
+    if(!window.confirm('Пропустить один ранее ошибочный пакет? Его оригинальные сообщения останутся сохранёнными, но ФАКТЫ из них не будут извлечены. Продолжить?'))return;
+    const r=await mn.skipFailedBatch();status(`Пропущен проблемный пакет ${r.id}: ${r.messages} исходников сохранены локально без разметки. Нажми «Обработать новые события», чтобы продолжить.`);updateChat();
+  });
   bind('#mn-sync-now','click',async()=>{status('Сохраняю резервную копию на сервер SillyTavern…');const r=await mn.backupNow();status(`Сохранено: ${r.path}`);updateChat();});
   bind('#mn-export','click',()=>{mn.exportBackup();status('Полный архив экспортирован в JSON.');});
   bind('#mn-restore','change',async()=>{const f=$('#mn-restore').files?.[0];if(!f)return;if(!window.confirm('Заменить текущий архив этой резервной копией? Сначала экспортируй текущую!'))return;await restoreFile(f);});

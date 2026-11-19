@@ -406,14 +406,66 @@ export function validateArchive(archive) {
 export function extractionPrompt(sources,{openPromises=[]}={}) {
   const safe=sources.map(s=>({id:s.id,role:s.role,name:s.name,text:extractionView(s)}));
   return [
-    {role:'system',content:`You are a strict, non-fictionalizing extractor for FICTIONAL roleplay. Output ONLY compact valid JSON: {"facts":[{"shelf":"chronology|people|relationships|promises|items|knowledge|locations|secrets|quotes|threads|arcs|other","text":"one atomic claim","people":[],"tags":[],"entity_key":"stable identity of promise, item or arc","promise_status":"unknown|pending|fulfilled|broken|cancelled","arc_status":"unknown|planned|active|completed|paused|abandoned","knowledge_holder":"NPC name or reader-only","knowledge_state":"unknown|knows|believes|suspects|unaware","certainty":"confirmed|belief|possibility","lifecycle":"active|closed|historical","source_ids":["exact source id"]}]}. One distinct item, quote, promise or arc PER record. Keep original language and distinctive emotional gestures. Track promise fulfillment only upon explicit completion evidence; never assume merely from time passing. Reuse the entity_key of an existing promise when a new message changes its status, and cite the NEW message. Identify NPC knowledge ONLY when scene explicitly shows hearing, witnessing, disclosure, belief or ignorance. Reader-only secrets are never NPC knowledge. Separate completed arcs from active story threads. Ignore book title/preface and formatting metadata. No guessed events, no predicted outcomes, no incompatible swipe merges. Max 45 facts; if no new durable information return {"facts":[]}.`},
+    {role:'system',content:`You are a strict, non-fictionalizing extractor for FICTIONAL roleplay. Output ONLY compact valid JSON: {"facts":[{"shelf":"chronology|people|relationships|promises|items|knowledge|locations|secrets|quotes|threads|arcs|other","text":"one atomic claim","people":[],"tags":[],"entity_key":"stable identity of promise, item or arc","promise_status":"unknown|pending|fulfilled|broken|cancelled","arc_status":"unknown|planned|active|completed|paused|abandoned","knowledge_holder":"NPC name or reader-only","knowledge_state":"unknown|knows|believes|suspects|unaware","certainty":"confirmed|belief|possibility","lifecycle":"active|closed|historical","source_ids":["exact source id"]}]}. One distinct item, quote, promise or arc PER record. A mere offer or wish is not a promise; an ambition belongs in people/threads. Objects go to items; one-time actions go to chronology. NPC knowledge means information actually learned or explicitly not learned, not ordinary narration of what someone did. Keep original language and distinctive emotional gestures. Track promise fulfillment only upon explicit completion evidence; never assume merely from time passing. Reuse the entity_key of an existing promise when a new message changes its status, and cite the NEW message. Identify NPC knowledge ONLY when scene explicitly shows hearing, witnessing, disclosure, belief or ignorance. Reader-only secrets are never NPC knowledge. Separate completed arcs from active story threads. Ignore book title/preface and formatting metadata. No guessed events, no predicted outcomes, no incompatible swipe merges. Max 45 facts; if no new durable information return {"facts":[]}.`},
     {role:'user',content:JSON.stringify({task:'Extract durable atomic facts and any explicitly evidenced status changes',openPromises:openPromises.slice(0,35),messages:safe})}
   ];
 }
 
+/** Only explicit provider policy/safety reasons count as content refusal.
+ * Generic API/network errors must not silently skip historical sources. */
+export function isContentPolicyRejection(error) {
+  if (!error) return false;
+  const nested=[error,error?.cause,error?.response?.data,error?.response?.data?.error,error?.error,
+    error?.details,error?.data].filter(Boolean);
+  const parts=[];
+  for (const v of nested) {
+    if(typeof v==='string')parts.push(v);
+    else if(typeof v==='object')for(const k of ['message','code','status','statusText','reason','finishReason','blockReason','blockedReason'])
+      if(typeof v[k]==='string')parts.push(v[k]);
+  }
+  return /(?:PROHIBITED[_ -]?CONTENT|CONTENT[_ -]?POLICY|CONTENT[_ -]?FILTER|PROMPT[_ -]?BLOCKED|SAFETY[_ -]?(?:FILTER|BLOCK|REJECT|REASON)|BLOCK[_ -]?REASON|HARM[_ -]?CATEGORY)/i.test(parts.join(' '));
+}
+
+/** Diagnostic-only summary; does not try to silently "repair" conflicting canon. */
+export function auditArchive(archive) {
+  const facts=archive?.facts??[], sources=archive?.sources??[], batches=archive?.batches??[];
+  const covered=new Set(batches.filter(b=>['done','blocked'].includes(b.status)).flatMap(b=>b.sourceIds??[]));
+  const selected=sources.filter(s=>s.active&&!s.deleted);
+  const imported=facts.filter(f=>f.sourceIds?.some(x=>String(x).startsWith('book-')));
+  const chatFacts=facts.filter(f=>f.sourceIds?.some(x=>String(x).startsWith('m')));
+  const statuses={};
+  for(const shelf of Object.keys(SHELVES))if(shelf!=='recaps')statuses[shelf]=facts.filter(x=>x.shelf===shelf).length;
+  const suspectedKeyVariants=[];
+  for(const shelf of ['items','promises','relationships','arcs']) {
+    const groups=new Map();
+    for(const f of facts.filter(x=>x.shelf===shelf && x.entityKey)) {
+      const normalized=cleanText(f.entityKey).toLowerCase().replace(/[\s_]+/g,'-');
+      const values=groups.get(normalized)??[];values.push(f.entityKey);groups.set(normalized,values);
+    }
+    for(const [key,values] of groups)if(new Set(values).size>1)suspectedKeyVariants.push({shelf,key,variants:[...new Set(values)]});
+  }
+  return {
+    selectedSources:selected.length,
+    alternativeSources:sources.length-selected.length,
+    activeAssistantRecaps:fullRecapRecords(archive).length,
+    importedFacts:imported.length,chatFacts:chatFacts.length,
+    completedBatches:batches.filter(b=>b.status==='done').length,
+    blockedBatches:batches.filter(b=>b.status==='blocked').length,
+    unprocessedSelected:selected.filter(s=>!covered.has(s.id)).length,
+    perShelf:statuses,
+    warnings:[
+      ...(batches.some(b=>b.status==='blocked')?['Есть пропущенные пакеты: исходники сохранены, факты из них НЕ извлечены.']:[]),
+      ...(imported.length>chatFacts.length*5?['Большая часть фактов взята из старой Memory Book, а не проверена по исходному чату.']:[]),
+      ...(archive?.imports?.some(x=>(x.raw??'').length<200)?['Есть импортированный документ короче 200 символов: проверь, не была ли случайно импортирована инструкция.']:[]),
+      ...(suspectedKeyVariants.length?['Некоторые entity_key отличаются лишь форматом написания; проверь объединение записей.']:[]),
+    ],
+    suspectedKeyVariants,
+  };
+}
+
 /** Source-based scheduling: no modulo timing, no automatic bill for imported old chat history. */
 export function pendingExtraction(archive,{force=false}={}) {
-  const processed=new Set((archive.batches??[]).filter(b=>b.status==='done').flatMap(b=>b.sourceIds));
+  const processed=new Set((archive.batches??[]).filter(b=>['done','blocked'].includes(b.status)).flatMap(b=>b.sourceIds));
   const start=force?0:Math.max(0,Number(archive.autoStartIndex)||0);
   const sources=archive.sources.filter(s=>s.active&&!s.deleted&&!processed.has(s.id)&&s.index>=start);
   return {sources,assistantCount:sources.filter(s=>s.role==='assistant').length};

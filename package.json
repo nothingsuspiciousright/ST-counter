@@ -1,7 +1,7 @@
 {
   "name": "sillytavern-sola-mnemosyne",
   "private": true,
-  "version": "0.3.8",
+  "version": "0.3.9",
   "type": "module",
   "description": "Independent vector-free deep RP memory extension for SillyTavern",
   "scripts": {"test": "node --test tests/*.test.js"}

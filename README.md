@@ -111,7 +111,7 @@ Memory shelves and source search now use scoped, accessible expandable rows inst
 В полочках для каждого чата раздельно показываются новые записи (серебристая ✦) и изменения прежних состояний (золотистый ◆). При открытии полочки записи подсвечиваются; отметки «непрочитано» только этой полочки исчезают, но подсветка в текущем просмотре остаётся. Отслеживание опирается на стабильный `entity_key`, если архивариус его возвращает. Если модель не привязала исправление к прежнему объекту, запись может определиться как новая. Исходные факты и старые версии статусов сохраняются.
 
 
-## v0.3.8 — Полные recap снова на полочках
+## v0.3.9 — Полные recap снова на полочках
 
 - Новая самостоятельная полочка **«Полные recap»** показывает целиком тело каждого recap из сохранённых ответов ассистента. Никакого пересказа и новых платных запросов.
 - Записи связаны с конкретным сообщением и выбранным свайпом; просмотр исходников доступен отдельно через поиск и полный архив.
@@ -120,3 +120,12 @@ Memory shelves and source search now use scoped, accessible expandable rows inst
 - Это **виртуальная полочка** из `archive.sources[].raw`: повторно импортировать Memory Book или запускать дешёвую модель не требуется.
 - Если старые recap не были захвачены архивом, нажмите **«Обновить архив из чата»**. Сведения, отсутствовавшие в оригинальном чате, расширение восстановить не может.
 - Полные recap хранятся вне постоянного промпта; только небольшой контекстный фрагмент может быть извлечён при достаточно конкретной связи с текущей сценой. Он подчиняется общему бюджету.
+
+
+### v0.3.9 — when an archivist provider refuses source content
+
+A provider may return an explicit safety/content-policy refusal. Mnemosyne **does not bypass** that response: it archives the full original source locally, marks the batch `blocked`, continues with the other batches, and reports the missed coverage in Diagnostics. This is not a success status and no model-generated facts are fabricated for blocked messages. A generic API error is treated as unknown and processing pauses.
+
+If your provider only exposes `API request failed` and the same batch cannot be processed, download a backup first, then use **Пропустить ошибочный пакет (оригинал сохранить)**. It intentionally leaves a gap in *structured* memory but does not destroy raw story text or complete recap. The manual action is available only for a batch that failed previously, and requires confirmation. Diagnostics show the number of such gaps.
+
+**Quality audit:** Open Diagnostics → Check. Besides archive integrity, the `quality` field describes imported-vs-chat fact counts and source processing gaps. These warnings do not automatically edit or merge RP canon.

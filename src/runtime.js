@@ -1,4 +1,4 @@
-import {SHELVES,newArchive,snapshotChat,mergeSources,syncActiveSources,sourceId,importMemoryBook,parseJsonReply,addFacts,extractionPrompt,retrieve,renderContext,validateArchive,terms,hash,pendingExtraction,extractionView,planLegacyJobs,requestLegacyFacts,segmentLegacyChunk,currentStateRecords,activeFact,fullRecapRecords} from './core.js';
+import {SHELVES,newArchive,snapshotChat,mergeSources,syncActiveSources,sourceId,importMemoryBook,parseJsonReply,addFacts,extractionPrompt,retrieve,renderContext,validateArchive,terms,hash,pendingExtraction,extractionView,planLegacyJobs,requestLegacyFacts,segmentLegacyChunk,currentStateRecords,activeFact,fullRecapRecords,isContentPolicyRejection,auditArchive} from './core.js';
 import {localGet,localPut,serverGet,serverPut,downloadJson} from './storage.js';
 import {ConnectionManagerRequestService} from '../../../shared.js';
 import {readSnapshot,diffReadSnapshot} from './read-markers.js';
@@ -23,7 +23,7 @@ function enqueue(task){queue=queue.catch(()=>{}).then(task);return queue;}
 async function persist(){if(active)await localPut(active);}
 export function currentArchive(){return active;}
 export function currentIdentity(){return activeId;}
-export function getStats(){return active?{...validateArchive(active),chatId:active.chatId,lastSync:active.lastSync,pending:pendingExtraction(active).assistantCount,batchEvery:settings().batchEvery,recentLog:log.slice(0,8)}:null;}
+export function getStats(){return active?{...validateArchive(active),blockedBatches:(active.batches??[]).filter(x=>x.status==='blocked').length,chatId:active.chatId,lastSync:active.lastSync,pending:pendingExtraction(active).assistantCount,batchEvery:settings().batchEvery,recentLog:log.slice(0,8)}:null;}
 
 /** Bind a new conversation to an independent archive (or fork a copied metadata pointer). */
 export async function openChat(){return enqueue(async()=>{
@@ -96,7 +96,7 @@ export async function processBacklog({force=false}={}){
     await captureCurrentChat({quiet:true});
     const {sources:candidates,assistantCount}=pendingExtraction(active,{force});
     if(!force&&assistantCount<settings().batchEvery)return {waiting:true,assistantCount};
-    let count=0,created=0;
+    let count=0,created=0,blocked=0;
     for(let i=0;i<candidates.length;i+=6){
       const six=candidates.slice(i,i+6);
       const origChatId=activeId;
@@ -112,15 +112,50 @@ export async function processBacklog({force=false}={}){
         active.batches.push({id,sourceIds:six.map(x=>x.id),status:'done',facts:added.length,at:new Date().toISOString()});
         active.revision++;count++;created+=added.length;
         await persist();sendStatus('info',`Batch ${count}: ${added.length} facts / ${six.length} messages`);
-      }catch(err){active.diagnostics.push({at:new Date().toISOString(),kind:'extract_error',id,message:err.message});await persist();sendStatus('error',`Batch extraction stopped: ${err.message}`);throw err;}
+      }catch(err){
+        if(isContentPolicyRejection(err)) {
+          // A provider policy refusal is NOT a successful extraction. The raw
+          // messages remain locally available; no filtered rewrite or workaround.
+          active.batches.push({id,sourceIds:six.map(x=>x.id),status:'blocked',facts:0,
+            reason:'provider_content_policy',at:new Date().toISOString()});
+          active.diagnostics.push({at:new Date().toISOString(),kind:'content_blocked',id,
+            message:'Provider refused this source batch. Originals preserved; facts NOT extracted.'});
+          active.revision++;blocked++;await persist();
+          sendStatus('warn',`Provider blocked a batch of ${six.length} messages; originals remain in the archive. Processing other batches.`);
+          continue;
+        }
+        active.diagnostics.push({at:new Date().toISOString(),kind:'extract_error',id,message:err.message});
+        await persist();sendStatus('error',`Batch extraction stopped: ${err.message}`);throw err;
+      }
     }
-    if(settings().autoBackup && count){
+    if(settings().autoBackup && (count||blocked)){
       try {await backupNow();} catch (err) {sendStatus('warn',`Факты сохранены, но серверная копия не создана: ${err.message}`);}
     }
-    if(count){
-      memoryUpdated('extract',created?`Мнемозина обновила память · +${created} фактов`:`Мнемозина обработала ${count} пакетов · новых фактов нет`);
+    if(count||blocked){
+      memoryUpdated('extract',`${count} пакетов обработано, +${created} фактов; ${blocked} отклонено провайдером`);
     }
-    return {batches:count,facts:created};
+    return {batches:count,facts:created,blocked};
+  });
+}
+/** Explicit opt-in for generic API errors that conceal their real cause.
+ * A skipped batch remains part of the raw archive and cannot be mistaken for processed facts. */
+export async function skipFailedBatch(){
+  if(!active)throw Error('No chat is open');
+  return enqueue(async()=>{
+    await captureCurrentChat({quiet:true});
+    const six=pendingExtraction(active,{force:true}).sources.slice(0,6);
+    if(!six.length)throw Error('No unprocessed source batch');
+    const id=`batch-${hash(six.map(x=>x.id).join('|'))}`;
+    if(!(active.diagnostics??[]).some(x=>x.id===id&&x.kind==='extract_error'))
+      throw Error('Only a previously failed batch may be skipped manually');
+    const record={id,sourceIds:six.map(x=>x.id),status:'blocked',facts:0,
+      reason:'manually_skipped_after_error',at:new Date().toISOString()};
+    active.batches.push(record);
+    active.diagnostics.push({at:record.at,kind:'manual_skip',id,
+      message:'Batch skipped by user after an error. Originals preserved; facts NOT extracted.'});
+    active.revision++;await persist();
+    sendStatus('warn',`Skipped ${six.length} messages after the confirmed failure; originals remain archived.`);
+    return {id,messages:six.length};
   });
 }
 /** Automatically process only NEW assistant replies collected since activation. */
@@ -328,4 +363,4 @@ export async function markShelfRead(shelf){
   });
 }
 export function legacySources(){return active?.imports??[];}
-export async function checkHealth(){if(!active)return {valid:false,errors:['No archive']};const v=validateArchive(active);v.connectionReady=!!settings().profileId&&connectionProfiles().some(x=>x.id===settings().profileId);v.serverSynced=!!active.lastSync;v.injection=lastInjection;return v;}
+export async function checkHealth(){if(!active)return {valid:false,errors:['No archive']};const v=validateArchive(active);v.connectionReady=!!settings().profileId&&connectionProfiles().some(x=>x.id===settings().profileId);v.serverSynced=!!active.lastSync;v.injection=lastInjection;v.quality=auditArchive(active);return v;}
