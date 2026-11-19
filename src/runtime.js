@@ -1,9 +1,9 @@
-import {SHELVES,newArchive,snapshotChat,mergeSources,syncActiveSources,sourceId,importMemoryBook,parseJsonReply,addFacts,extractionPrompt,retrieve,renderContext,validateArchive,terms,hash,pendingExtraction,extractionView,planLegacyJobs,requestLegacyFacts,segmentLegacyChunk,currentStateRecords,activeFact,fullRecapRecords,isContentPolicyRejection,auditArchive} from './core.js';
+import {SHELVES,newArchive,snapshotChat,mergeSources,syncActiveSources,sourceId,importMemoryBook,parseJsonReply,addFacts,extractionPrompt,retrieve,renderContext,validateArchive,terms,hash,pendingExtraction,extractionView,planLegacyJobs,requestLegacyFacts,segmentLegacyChunk,currentStateRecords,activeFact,fullRecapRecords,isContentPolicyRejection,auditArchive,planChatBatches,isJsonExtractionError,retryOutputTokens} from './core.js';
 import {localGet,localPut,serverGet,serverPut,downloadJson} from './storage.js';
 import {ConnectionManagerRequestService} from '../../../shared.js';
 import {readSnapshot,diffReadSnapshot} from './read-markers.js';
 const KEY='sola_mnemosyne_v1';
-const BASE_SETTINGS={enabled:false,profileId:'',batchEvery:40,autoUpdate:true,maxTokens:2200,contextTokens:2400,recentLookback:2,autoBackup:true,archiveOnReceive:true,successNotifications:true};
+const BASE_SETTINGS={enabled:false,profileId:'',batchEvery:40,autoUpdate:true,maxTokens:8192,contextTokens:2400,recentLookback:2,autoBackup:true,archiveOnReceive:true,successNotifications:true};
 export const log=[];
 let active=null, activeId='',queue=Promise.resolve(),lastInjection='',lastSyncCount=0,autoRunning=false;
 // Short scene-local character texture should not be sent on every generation.
@@ -13,7 +13,20 @@ function sendStatus(level,message){const item={at:new Date().toLocaleTimeString(
 function memoryUpdated(kind,message){
   document.dispatchEvent(new CustomEvent('mnemosyne:updated',{detail:{kind,message,at:new Date().toISOString()}}));
 }
-export function settings(){const s=ctx().extensionSettings; if(!s[KEY])s[KEY]=structuredClone(BASE_SETTINGS);for(const [k,v] of Object.entries(BASE_SETTINGS))if(!(k in s[KEY]))s[KEY][k]=v;return s[KEY];}
+export function settings(){
+  const s=ctx().extensionSettings;
+  if(!s[KEY])s[KEY]=structuredClone(BASE_SETTINGS);
+  for(const [k,v] of Object.entries(BASE_SETTINGS))if(!(k in s[KEY]))s[KEY][k]=v;
+  // Earlier releases never exposed maxTokens in the UI; 2200 was an internal
+  // default, not a deliberate user choice. Upgrade it once without touching
+  // contextTokens (the RP memory budget, which users may have customized).
+  if(!s[KEY].archivistBudgetMigrated){
+    if(s[KEY].maxTokens===2200)s[KEY].maxTokens=8192;
+    s[KEY].archivistBudgetMigrated=true;
+    ctx().saveSettingsDebounced();
+  }
+  return s[KEY];
+}
 export function saveSettings(){ctx().saveSettingsDebounced();}
 export function connectionProfiles(){try{return ConnectionManagerRequestService.getSupportedProfiles();}catch(e){sendStatus('warn',`Connection Profiles: ${e.message}`);return [];}}
 function chatIdentity(){const c=ctx();return String(c.getCurrentChatId?.()??c.chatId??'');}
@@ -97,32 +110,50 @@ export async function processBacklog({force=false}={}){
     const {sources:candidates,assistantCount}=pendingExtraction(active,{force});
     if(!force&&assistantCount<settings().batchEvery)return {waiting:true,assistantCount};
     let count=0,created=0,blocked=0;
-    for(let i=0;i<candidates.length;i+=6){
-      const six=candidates.slice(i,i+6);
+    const jobs=planChatBatches(candidates).map(sources=>({sources,tokenLimit:settings().maxTokens,retried:false}));
+    for(let i=0;i<jobs.length;i++){
+      const job=jobs[i],batchSources=job.sources;
       const origChatId=activeId;
-      const id=`batch-${hash(six.map(x=>x.id).join('|'))}`;
+      const id=`batch-${hash(batchSources.map(x=>x.id).join('|'))}`;
       try{
         const openPromises=currentStateRecords(active.facts,'promises')
           .filter(f=>['unknown','pending'].includes(f.promiseStatus??'unknown')&&f.entityKey)
-          .slice(0,35).map(f=>({entity_key:f.entityKey,text:f.text,status:f.promiseStatus}));
-        const reply=await callArchivist(extractionPrompt(six,{openPromises}),settings().maxTokens);
-        if(origChatId!==chatIdentity())throw Error('Chat changed during extraction; aborted to prevent contamination');
+          .slice(0,20).map(f=>({entity_key:f.entityKey,text:f.text,status:f.promiseStatus}));
+        const reply=await callArchivist(extractionPrompt(batchSources,{openPromises}),job.tokenLimit);
+        if(origChatId!==chatIdentity()||origChatId!==activeId)throw Error('Chat changed during extraction; aborted to prevent contamination');
         if(!Array.isArray(reply.facts))throw Error('Archivist JSON missing facts array');
-        const added=addFacts(active,six.map(x=>x.id),reply.facts);
-        active.batches.push({id,sourceIds:six.map(x=>x.id),status:'done',facts:added.length,at:new Date().toISOString()});
+        const added=addFacts(active,batchSources.map(x=>x.id),reply.facts);
+        active.batches.push({id,sourceIds:batchSources.map(x=>x.id),status:'done',facts:added.length,at:new Date().toISOString()});
         active.revision++;count++;created+=added.length;
-        await persist();sendStatus('info',`Batch ${count}: ${added.length} facts / ${six.length} messages`);
+        await persist();sendStatus('info',`Batch ${count}: ${added.length} facts / ${batchSources.length} messages`);
       }catch(err){
         if(isContentPolicyRejection(err)) {
-          // A provider policy refusal is NOT a successful extraction. The raw
-          // messages remain locally available; no filtered rewrite or workaround.
-          active.batches.push({id,sourceIds:six.map(x=>x.id),status:'blocked',facts:0,
+          // Provider policy refusals are never retried by splitting or rewriting.
+          active.batches.push({id,sourceIds:batchSources.map(x=>x.id),status:'blocked',facts:0,
             reason:'provider_content_policy',at:new Date().toISOString()});
           active.diagnostics.push({at:new Date().toISOString(),kind:'content_blocked',id,
             message:'Provider refused this source batch. Originals preserved; facts NOT extracted.'});
           active.revision++;blocked++;await persist();
-          sendStatus('warn',`Provider blocked a batch of ${six.length} messages; originals remain in the archive. Processing other batches.`);
+          sendStatus('warn',`Provider blocked a batch of ${batchSources.length} messages; originals remain in the archive. Processing other batches.`);
           continue;
+        }
+        // Fail closed on malformed JSON; retry using additional completion
+        // tokens once, then split the job and commit each successful half.
+        // This avoids re-paying for previously committed source IDs.
+        if(isJsonExtractionError(err)) {
+          if(!job.retried && job.tokenLimit<32768){
+            jobs.splice(i,1,{...job,tokenLimit:retryOutputTokens(job.tokenLimit),retried:true});
+            i--;sendStatus('warn','Incomplete archivist JSON: retrying with a larger output allowance.');
+            continue;
+          }
+          if(batchSources.length>1){
+            const half=Math.ceil(batchSources.length/2);
+            jobs.splice(i,1,
+              {sources:batchSources.slice(0,half),tokenLimit:settings().maxTokens,retried:false},
+              {sources:batchSources.slice(half),tokenLimit:settings().maxTokens,retried:false});
+            i--;sendStatus('warn','Incomplete archivist JSON: dividing the source batch; original text remains untouched.');
+            continue;
+          }
         }
         active.diagnostics.push({at:new Date().toISOString(),kind:'extract_error',id,message:err.message});
         await persist();sendStatus('error',`Batch extraction stopped: ${err.message}`);throw err;
@@ -143,7 +174,7 @@ export async function skipFailedBatch(){
   if(!active)throw Error('No chat is open');
   return enqueue(async()=>{
     await captureCurrentChat({quiet:true});
-    const six=pendingExtraction(active,{force:true}).sources.slice(0,6);
+    const six=planChatBatches(pendingExtraction(active,{force:true}).sources)[0]??[];
     if(!six.length)throw Error('No unprocessed source batch');
     const id=`batch-${hash(six.map(x=>x.id).join('|'))}`;
     if(!(active.diagnostics??[]).some(x=>x.id===id&&x.kind==='extract_error'))

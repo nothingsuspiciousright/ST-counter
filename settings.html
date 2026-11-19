@@ -1,6 +1,6 @@
 <section id="mnemosyne-panel" class="mn-theme">
   <details class="mn-root" open>
-    <summary class="mn-top"><span class="mn-symbol">✦</span><span><strong>Sola Mnemosyne</strong><small>Глубокая память · архивариус</small></span><span class="mn-version">v0.3.8</span></summary>
+    <summary class="mn-top"><span class="mn-symbol">✦</span><span><strong>Sola Mnemosyne</strong><small>Глубокая память · архивариус</small></span><span class="mn-version">v0.3.10</span></summary>
     <div class="mn-body">
       <p class="mn-subtle">Независима от Summarize, векторов и лорбуков. Исходная история сохраняется; в контекст передаются выбранные записи.</p>
       <nav class="mn-tabs">
@@ -20,6 +20,10 @@
           <label class="mn-field">Обновлять каждые N ответов <input id="mn-interval" type="number" min="1" max="200" value="40" class="text_pole"/></label>
           <label class="mn-field">Бюджет контекста (примерно, токены) <input id="mn-budget" type="number" min="300" max="12000" step="100" value="2400" class="text_pole"/></label>
         </div>
+        <label class="mn-field">Лимит вывода архивариуса (токены ответа модели)
+          <input id="mn-archivist-tokens" type="number" min="1024" max="32768" step="512" value="8192" class="text_pole"/>
+        </label>
+        <p class="mn-hint">Отдельно от бюджета контекста RP. Для моделей с рассуждениями начни с 8192–12000, если твой API поддерживает такой лимит. Увеличение лимита не гарантирует правильный JSON и может повысить стоимость.</p>
         <label class="mn-check"><input id="mn-auto-backup" type="checkbox" checked/> <span>Автоматически сохранять копии на сервер SillyTavern</span></label>
         <label class="mn-check"><input id="mn-success-notifications" type="checkbox" checked/> <span>Тихое уведомление об успешном обновлении памяти</span></label>
         <p class="mn-hint">Маленькая серебряная плашка на 3 секунды. Без звука и вибрации; только после сохранения обработанной памяти, не после каждого сообщения.</p>

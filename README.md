@@ -129,3 +129,7 @@ A provider may return an explicit safety/content-policy refusal. Mnemosyne **doe
 If your provider only exposes `API request failed` and the same batch cannot be processed, download a backup first, then use **Пропустить ошибочный пакет (оригинал сохранить)**. It intentionally leaves a gap in *structured* memory but does not destroy raw story text or complete recap. The manual action is available only for a batch that failed previously, and requires confirmation. Diagnostics show the number of such gaps.
 
 **Quality audit:** Open Diagnostics → Check. Besides archive integrity, the `quality` field describes imported-vs-chat fact counts and source processing gaps. These warnings do not automatically edit or merge RP canon.
+
+## v0.3.10 — independent archivist output limit
+
+The *RP context budget* (`contextTokens`) limits injection into your RP model. The *archivist output limit* (`maxTokens`) limits tokens the separate model can use to produce reasoning plus structured JSON, as enforced by the API/provider. These are different. The archivist output setting is now visible, default 8192. Older hidden 2200-token settings are automatically raised once; user-configured RP context limits are not modified. Chat source batches are smaller and malformed JSON receives a larger-token retry, then is split into separate messages if needed. Never record incomplete results as successful extraction. API refusal still leaves affected originals safely archived and unprocessed.

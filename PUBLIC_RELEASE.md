@@ -1,14 +1,11 @@
-# Sola Mnemosyne v0.3.9 — safe extraction failure handling
+# Sola Mnemosyne v0.3.10 — configurable archivist output budget
 
-This is a publicly shareable CODE-ONLY release. It does **not** contain user archives, private messages, keys, or real roleplay examples.
+Public source-code-only release. No private character names, RP excerpts, archives, or keys are included.
 
-- Provider content policy refusal: mark the affected batch as `blocked`, preserve all original sources unmodified, continue processing subsequent batches. This never attempts to bypass the provider's refusal.
-- A generic `API request failed` is **not** classified as a policy block, because the provider's underlying cause might be transient.
-- New button: **Пропустить ошибочный пакет (оригинал сохранить)**. Explicit user confirmation; works only for a batch that has already failed. The skipped batch remains visibly counted and can still be searched locally.
-- Diagnostics now include structural validation and a separate quality-audit summary (facts derived from imported sources vs chat, blocked batches, unprocessed selected sources, potential key variants, short imported documents).
-- Classification instructions distinguish promises from offers, objects from events, and knowledge from ordinary observed actions. Existing erroneous imported facts are **not automatically rewritten**.
-- Source archive, original recap texts, and all conversation swipe variants remain unchanged. No automatic reindex on upgrade.
+- The `Бюджет контекста` input controls ONLY how much memory the main roleplay model receives; any user-customized value is preserved.
+- A new separate `Лимит вывода архивариуса` input controls the separate model's completion budget, default 8192. Existing hidden default of 2200 migrates once to 8192; custom values are preserved.
+- Chat extraction now processes pairs of source messages, requests no more than 20 concise atomic facts per job, and retries malformed JSON once with a larger completion budget. If a paired request is still malformed, the two original messages are tried separately. Successful jobs are committed independently and never erased on later failure.
+- No truncated/empty JSON is marked processed. The provider's content-policy refusals are not circumvented. Archive text and original recaps remain untouched.
+- If a provider uses extensive hidden/visible reasoning, even 8192 completion tokens may be insufficient. Consider a non-reasoning archival model or increase the output limit only to what the provider supports.
 
-**Important:** The quality warnings do not determine the correct canonical state automatically. Review suspicious promise statuses and NPC knowledge against original messages. Archive consistency and literary correctness are different tests.
-
-Update via GitHub extension repository, preserving your local archive; export a backup before upgrading. Do not upload personal archive JSON files into the public repository. Run `npm test` to validate the pure logic. Real provider/SillyTavern integration remains unverified.
+**Back up your archive JSON locally, never upload it to public GitHub.** Update extension source files and reload. No re-import, reindex or reset is needed. Real provider integration remains to be validated in SillyTavern.

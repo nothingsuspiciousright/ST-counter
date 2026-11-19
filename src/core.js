@@ -406,7 +406,7 @@ export function validateArchive(archive) {
 export function extractionPrompt(sources,{openPromises=[]}={}) {
   const safe=sources.map(s=>({id:s.id,role:s.role,name:s.name,text:extractionView(s)}));
   return [
-    {role:'system',content:`You are a strict, non-fictionalizing extractor for FICTIONAL roleplay. Output ONLY compact valid JSON: {"facts":[{"shelf":"chronology|people|relationships|promises|items|knowledge|locations|secrets|quotes|threads|arcs|other","text":"one atomic claim","people":[],"tags":[],"entity_key":"stable identity of promise, item or arc","promise_status":"unknown|pending|fulfilled|broken|cancelled","arc_status":"unknown|planned|active|completed|paused|abandoned","knowledge_holder":"NPC name or reader-only","knowledge_state":"unknown|knows|believes|suspects|unaware","certainty":"confirmed|belief|possibility","lifecycle":"active|closed|historical","source_ids":["exact source id"]}]}. One distinct item, quote, promise or arc PER record. A mere offer or wish is not a promise; an ambition belongs in people/threads. Objects go to items; one-time actions go to chronology. NPC knowledge means information actually learned or explicitly not learned, not ordinary narration of what someone did. Keep original language and distinctive emotional gestures. Track promise fulfillment only upon explicit completion evidence; never assume merely from time passing. Reuse the entity_key of an existing promise when a new message changes its status, and cite the NEW message. Identify NPC knowledge ONLY when scene explicitly shows hearing, witnessing, disclosure, belief or ignorance. Reader-only secrets are never NPC knowledge. Separate completed arcs from active story threads. Ignore book title/preface and formatting metadata. No guessed events, no predicted outcomes, no incompatible swipe merges. Max 45 facts; if no new durable information return {"facts":[]}.`},
+    {role:'system',content:`You are a strict, non-fictionalizing extractor for FICTIONAL roleplay. Output ONLY compact valid JSON: {"facts":[{"shelf":"chronology|people|relationships|promises|items|knowledge|locations|secrets|quotes|threads|arcs|other","text":"one atomic claim","people":[],"tags":[],"entity_key":"stable identity of promise, item or arc","promise_status":"unknown|pending|fulfilled|broken|cancelled","arc_status":"unknown|planned|active|completed|paused|abandoned","knowledge_holder":"NPC name or reader-only","knowledge_state":"unknown|knows|believes|suspects|unaware","certainty":"confirmed|belief|possibility","lifecycle":"active|closed|historical","source_ids":["exact source id"]}]}. One distinct item, quote, promise or arc PER record. A mere offer or wish is not a promise; an ambition belongs in people/threads. Objects go to items; one-time actions go to chronology. NPC knowledge means information actually learned or explicitly not learned, not ordinary narration of what someone did. Keep original language and distinctive emotional gestures. Track promise fulfillment only upon explicit completion evidence; never assume merely from time passing. Reuse the entity_key of an existing promise when a new message changes its status, and cite the NEW message. Identify NPC knowledge ONLY when scene explicitly shows hearing, witnessing, disclosure, belief or ignorance. Reader-only secrets are never NPC knowledge. Separate completed arcs from active story threads. Ignore book title/preface and formatting metadata. No guessed events, no predicted outcomes, no incompatible swipe merges. Max 20 atomic facts; keep JSON compact; if no new durable information return {"facts":[]}.`},
     {role:'user',content:JSON.stringify({task:'Extract durable atomic facts and any explicitly evidenced status changes',openPromises:openPromises.slice(0,35),messages:safe})}
   ];
 }
@@ -461,6 +461,23 @@ export function auditArchive(archive) {
     ],
     suspectedKeyVariants,
   };
+}
+
+/** Small extraction batches reduce the chance that thinking-capable providers
+ * exhaust their completion budget before they finish JSON. Originals are never
+ * shortened or changed in the stored archive. */
+export function planChatBatches(sources,{maxSources=2}={}) {
+  const size=Math.max(1,Math.min(6,Math.floor(Number(maxSources)||2)));
+  const batches=[];
+  for(let i=0;i<sources.length;i+=size)batches.push(sources.slice(i,i+size));
+  return batches;
+}
+export function isJsonExtractionError(error) {
+  return /(?:invalid JSON|JSON missing facts array|JSON has no facts array|Unexpected end of JSON input)/i.test(String(error?.message??''));
+}
+export function retryOutputTokens(current, ceiling=32768) {
+  const value=Math.max(1024,Math.min(ceiling,Math.floor(Number(current)||8192)));
+  return Math.min(ceiling,Math.max(value+1024,Math.ceil(value*1.5)));
 }
 
 /** Source-based scheduling: no modulo timing, no automatic bill for imported old chat history. */
