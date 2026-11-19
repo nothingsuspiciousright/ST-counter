@@ -1,673 +1,203 @@
-
-import { getContext } from "../../../extensions.js";
-import { eventSource, event_types } from "../../../../script.js";
-import { getTokenCountAsync } from "../../../tokenizers.js";
-
-function cleanModelName(model) {
-    if (!model) return "";
-    return String(model).split('/').pop();
+/** Entry point. Importing this file doesn't alter a user's RP preset or chat. */
+import * as mn from './src/runtime.js';
+import {SHELVES, retrieve, validateArchive, splitMemoryBook} from './src/core.js';
+import {initNotifications, notifyMemoryUpdated} from './src/notifications.js';
+import {recordKey} from './src/read-markers.js';
+const BASE=new URL('.',import.meta.url);
+let selectedShelf='chronology',activeTab='archive',candidates=[],visibleShelfChanges=new Map(),recapShown=30;
+const $ = selector=>document.querySelector(`#mnemosyne-panel ${selector}`);
+function status(message,bad=false){const el=$('#mn-status');if(el){el.textContent=message;el.dataset.level=bad?'error':'info';}}
+function displayError(error){status(error?.message??String(error),true);console.error('[Mnemosyne]',error);}
+function bind(selector,event,fn){const el=$(selector);el?.addEventListener(event,async ev=>{try{await fn(ev);}catch(e){displayError(e);}});}
+function mkOption(value,label){const option=document.createElement('option');option.value=value;option.textContent=label;return option;}
+function renderProfiles(){const sel=$('#mn-profile');if(!sel)return;sel.replaceChildren(mkOption('','— Выберите дешёвую модель —'));
+  for(const p of mn.connectionProfiles())sel.append(mkOption(p.id,`${p.name} · ${p.model??p.api??''}`));sel.value=mn.settings().profileId??'';
 }
-
-// 1. Подсветка транзишенов внутри рекапа
-function highlightRecapBrackets(mesElement) {
-    const detailsList = mesElement.querySelectorAll('.mes_text details');
-
-    detailsList.forEach(details => {
-        if (details.dataset.bracketsHighlighted === "true") return;
-
-        const walker = document.createTreeWalker(
-            details,
-            NodeFilter.SHOW_TEXT,
-            null
-        );
-
-        const textNodes = [];
-        let node;
-
-        while ((node = walker.nextNode())) {
-            if (
-                node.parentElement &&
-                node.parentElement.tagName !== 'SUMMARY' &&
-                /\[[^\]]+\]/.test(node.nodeValue)
-            ) {
-                textNodes.push(node);
-            }
-        }
-
-        textNodes.forEach(textNode => {
-            const frag = document.createDocumentFragment();
-            const parts = textNode.nodeValue.split(/(\[[^\]]+\])/g);
-
-            parts.forEach(part => {
-                if (part.startsWith('[') && part.endsWith(']')) {
-                    const span = document.createElement('span');
-                    span.className = 'st-recap-bracket';
-                    span.textContent = part;
-                    frag.appendChild(span);
-                } else if (part) {
-                    frag.appendChild(document.createTextNode(part));
-                }
-            });
-
-            textNode.parentNode.replaceChild(frag, textNode);
-        });
-
-        details.dataset.bracketsHighlighted = "true";
+function updateChat(){const s=mn.getStats(),v=$('#mn-overview');if(!v)return;
+  v.textContent=s?`Источников: ${s.sourceCount} · фактов: ${s.factCount} · фрагментов оригинала: ${s.chunkCount} · импортов: ${s.imports} · новых ответов до автообновления: ${Math.max(0,s.batchEvery-s.pending)} · ${s.valid?'целостность OK':'ОШИБКИ'}`:'Открой сохранённый чат для работы с памятью.';
+  renderOriginals();
+  $('#mn-sync').textContent=s?.lastSync?`Снимок сервера: ${new Date(s.lastSync).toLocaleString()}`:'Резервная копия ещё не создана';
+  $('#mn-injection').textContent=mn.injectionInfo()||'Память ещё не подставлялась в запрос';
+  renderShelves();renderLog();
+}
+/** Controlled disclosure avoids theme-wide <details>/<summary> styling from escaping its row. */
+function makeRecordRow(label, body, metadata=''){
+  const row=document.createElement('div');row.className='mn-record';
+  const toggle=document.createElement('button');toggle.type='button';toggle.className='mn-record-toggle';
+  toggle.textContent=String(label??'');toggle.setAttribute('aria-expanded','false');
+  const content=document.createElement('div');content.className='mn-record-content';content.hidden=true;
+  if(metadata){const meta=document.createElement('div');meta.className='mn-meta';meta.textContent=metadata;content.append(meta);}
+  const pre=document.createElement('pre');pre.className='mn-record-text';pre.textContent=String(body??'');content.append(pre);
+  toggle.addEventListener('click',()=>{
+    content.hidden=!content.hidden;
+    toggle.setAttribute('aria-expanded',String(!content.hidden));
+  });
+  row.append(toggle,content);return row;
+}
+function renderShelves(){const parent=$('#mn-shelves');if(!parent)return;parent.replaceChildren();
+  for(const [id,name] of Object.entries(SHELVES)){
+    const button=document.createElement('button');button.type='button';button.className=`mn-chip${id===selectedShelf?' current':''}`;
+    button.append(document.createTextNode(name));
+    const changes=mn.shelfChanges(id);
+    for(const [kind,count] of [['new',changes.added],['changed',changes.changed]]){
+      if(!count)continue;
+      const pill=document.createElement('span');pill.className=`mn-unread mn-unread-${kind}`;
+      pill.textContent=`${kind==='new'?'✦':'◆'} ${count}`;
+      pill.title=kind==='new'?`${count} новых записей`:`${count} изменённых записей`;
+      button.append(pill);
+    }
+    button.addEventListener('click',async()=>{
+      if(id!==selectedShelf)recapShown=30;
+      selectedShelf=id;
+      // Keep visual highlights for the opened shelf, but clear unread counters
+      // persistently for this chat. Other shelves retain their unread status.
+      visibleShelfChanges=mn.shelfChanges(id).entries;
+      renderShelves();
+      try{await mn.markShelfRead(id);renderShelves();}catch(e){displayError(e);}
     });
+    parent.append(button);
+  }
+  const list=$('#mn-records');list.replaceChildren();
+  const allItems=mn.shelfRecords(selectedShelf);
+  const items=allItems.slice(0,selectedShelf==='recaps'?recapShown:80);
+  if(!items.length){list.textContent=selectedShelf==='recaps'
+    ?'В архиве этого чата пока нет распознанных recap. Нажми «Обновить архив из чата»: исходные ответы будут прочитаны без обращения к архивариусу и без повторного импорта Memory Book.'
+    :'Структурированных записей здесь пока нет. Оригинальная Memory Book сохранена во вкладке «Наследие»; при необходимости запусти переразметку.';return;}
+  const promiseNames={unknown:'не определён',pending:'ожидает выполнения',fulfilled:'выполнено',broken:'нарушено',cancelled:'отменено'};
+  const arcNames={unknown:'не определён',planned:'планируется',active:'идёт',completed:'завершена',paused:'приостановлена',abandoned:'оставлена'};
+  for(const item of items){
+    const promiseMark={unknown:'? статус не подтверждён',pending:'○ ожидает',fulfilled:'✓ выполнено',broken:'! нарушено',cancelled:'× отменено'};
+    const arcMark={unknown:'? статус неизвестен',planned:'○ планируется',active:'◐ продолжается',completed:'✓ завершена',paused:'Ⅱ на паузе',abandoned:'× прекращена'};
+    const prefix=selectedShelf==='promises'?`[${promiseMark[item.promiseStatus]??promiseMark.unknown}] `:
+      selectedShelf==='arcs'?`[${arcMark[item.arcStatus]??arcMark.unknown}] `:'';
+    const summary=selectedShelf==='recaps'
+      ?`Recap · сообщение #${item.messageIndex+1} · ${item.text.replace(/\s+/g,' ').slice(0,110)}`
+      :prefix+item.text.slice(0,145);
+    const status=selectedShelf==='promises'?` · Обещание: ${promiseNames[item.promiseStatus]??'не определён'}`:
+      selectedShelf==='arcs'?` · Арка: ${arcNames[item.arcStatus]??'не определён'}`:
+      selectedShelf==='knowledge'?` · Кому известно: ${item.knowledge||'не установлено'} (${item.knowledgeState||'unknown'})`:'';
+    const metadata=selectedShelf==='recaps'
+      ?`Полный оригинальный recap · источник: ${item.sourceId} · свайп ${item.swipe+1} · ${item.text.length} символов${item.sourceDate?' · '+item.sourceDate:''}`
+      :`Источник: ${item.sourceIds?.join(', ')??'—'} · ${item.certainty??'неизвестно'} · ${item.lifecycle??''}${status}`;
+    const row=makeRecordRow(summary,item.text,metadata);
+    const diff=visibleShelfChanges.get(recordKey(item));
+    if(diff){
+      row.classList.add(`mn-record-${diff.kind}`);
+      const mark=document.createElement('span');mark.className=`mn-record-marker mn-record-marker-${diff.kind}`;
+      mark.textContent=diff.kind==='new'?'✦ Новое':'◆ Изменено';
+      mark.title=diff.kind==='new'?'Добавлено после последнего просмотра полочки':'Обновлено после последнего просмотра полочки';
+      const button=row.querySelector('.mn-record-toggle');
+      if(button)button.append(mark);
+      if(diff.kind==='changed'&&diff.previous){
+        const previous=diff.previous;
+        const prior=selectedShelf==='promises'?previous.promiseStatus:selectedShelf==='arcs'?previous.arcStatus:
+          selectedShelf==='knowledge'?previous.knowledgeState:'';
+        const now=selectedShelf==='promises'?item.promiseStatus:selectedShelf==='arcs'?item.arcStatus:
+          selectedShelf==='knowledge'?item.knowledgeState:'';
+        if(prior&&now&&prior!==now){const note=row.querySelector('.mn-meta');
+          if(note)note.textContent+=` · Статус: ${prior} → ${now}`;}
+      }
+    }
+    list.append(row);
+  }
+  if(selectedShelf==='recaps'&&allItems.length>items.length){
+    const more=document.createElement('button');more.type='button';more.className='mn-show-more';
+    more.textContent=`Показать ещё 30 recap · отображено ${items.length} из ${allItems.length}`;
+    more.addEventListener('click',()=>{recapShown+=30;renderShelves();});
+    list.append(more);
+  }
+}
+function renderOriginals(){
+  const select=$('#mn-original-select');if(!select)return;
+  const originals=mn.legacySources();
+  const old=select.value;
+  if(select.options.length!==originals.length+1||originals.some((x,i)=>select.options[i+1]?.value!==x.id)){
+    select.replaceChildren(mkOption('','— Выбери импортированную Memory Book —'));
+    originals.forEach(x=>select.append(mkOption(x.id,`${x.label} · ${x.raw?.length??0} символов`)));
+    select.value=old||'';
+  }
+  const original=originals.find(x=>x.id===select.value);
+  const view=$('#mn-original-content');if(view)view.value=original?.raw??'';
+}
+function renderLog(){const root=$('#mn-log');if(!root)return;root.replaceChildren();for(const l of mn.log.slice(0,35)){
+  const line=document.createElement('div');line.className=`mn-log-line ${l.level}`;line.textContent=`${l.at} · ${l.level}: ${l.message}`;root.append(line);
+}}
+function switchTab(tab){activeTab=tab;for(const button of document.querySelectorAll('#mnemosyne-panel [data-tab]'))button.classList.toggle('current',button.dataset.tab===tab);
+  for(const section of document.querySelectorAll('#mnemosyne-panel [data-page]'))section.hidden=section.dataset.page!==tab;
+}
+function getInput(){return $('#mn-import-text').value;}
+async function listDetection(){candidates=mn.detectLegacy();const sel=$('#mn-detected');sel.replaceChildren(mkOption('','— выбери найденный документ —'));
+  candidates.forEach((x,i)=>sel.append(mkOption(String(i),`${x.path} (${x.length.toLocaleString('ru')} символов)`)));
+  status(candidates.length?`Обнаружено ${candidates.length} похожих источников; выбери и просмотри.`:'Автоматически Memory Book не найдена; можно вставить текст или выбрать файл.');
+}
+async function restoreFile(file){const text=await file.text();const r=await mn.restoreBackup(text);status(`Восстановлено: ${r.sourceCount} исходников, ${r.factCount} фактов`);updateChat();}
+async function initUI(){const container=document.querySelector('#extensions_settings2')||document.querySelector('#extensions_settings')||document.querySelector('#extensions_settings_container');
+  if(!container)throw Error('SillyTavern extension settings area not found');
+  const html=await fetch(new URL('./settings.html',BASE)).then(r=>{if(!r.ok)throw Error('Settings template missing');return r.text();});
+  const host=document.createElement('div');host.innerHTML=html;container.append(host);
+  const s=mn.settings();$('#mn-enabled').checked=s.enabled;$('#mn-interval').value=s.batchEvery;$('#mn-budget').value=s.contextTokens;$('#mn-auto-update').checked=s.autoUpdate;$('#mn-auto-backup').checked=s.autoBackup;$('#mn-success-notifications').checked=s.successNotifications;
+  for(const b of document.querySelectorAll('#mnemosyne-panel [data-tab]'))b.addEventListener('click',()=>switchTab(b.dataset.tab));
+  bind('#mn-enabled','change',()=>{s.enabled=$('#mn-enabled').checked;mn.saveSettings();status(s.enabled?'Подстановка памяти включена.':'Подстановка памяти выключена.');});
+  bind('#mn-profile','change',()=>{s.profileId=$('#mn-profile').value;mn.saveSettings();status('Профиль архивариуса сохранён; основная модель RP не менялась.');});
+  bind('#mn-interval','change',()=>{s.batchEvery=Math.max(1,Math.min(200,Number($('#mn-interval').value)||40));$('#mn-interval').value=s.batchEvery;mn.saveSettings();});
+  bind('#mn-budget','change',()=>{s.contextTokens=Math.max(300,Math.min(12000,Number($('#mn-budget').value)||2400));$('#mn-budget').value=s.contextTokens;mn.saveSettings();});
+  bind('#mn-auto-update','change',()=>{s.autoUpdate=$('#mn-auto-update').checked;mn.saveSettings();status(s.autoUpdate?'Автообновление включено.':'Автообновление выключено.');});
+  bind('#mn-auto-backup','change',()=>{s.autoBackup=$('#mn-auto-backup').checked;mn.saveSettings();});
+  bind('#mn-success-notifications','change',()=>{s.successNotifications=$('#mn-success-notifications').checked;mn.saveSettings();});
+  bind('#mn-scan','click',async()=>{await mn.fullRescan({notify:true});updateChat();});
+  bind('#mn-extract','click',async()=>{status('Архивариус обрабатывает новые события…');const r=await mn.processBacklog({force:true});status(`Готово: ${r.batches} пачек, ${r.facts} фактов`);updateChat();});
+  bind('#mn-sync-now','click',async()=>{status('Сохраняю резервную копию на сервер SillyTavern…');const r=await mn.backupNow();status(`Сохранено: ${r.path}`);updateChat();});
+  bind('#mn-export','click',()=>{mn.exportBackup();status('Полный архив экспортирован в JSON.');});
+  bind('#mn-restore','change',async()=>{const f=$('#mn-restore').files?.[0];if(!f)return;if(!window.confirm('Заменить текущий архив этой резервной копией? Сначала экспортируй текущую!'))return;await restoreFile(f);});
+  bind('#mn-detect','click',listDetection);
+  bind('#mn-original-select','change',renderOriginals);
+  bind('#mn-detected','change',()=>{const i=Number($('#mn-detected').value);if(Number.isInteger(i)&&candidates[i])$('#mn-import-text').value=candidates[i].text;});
+  bind('#mn-import-file','change',async()=>{const f=$('#mn-import-file').files?.[0];if(f){$('#mn-import-text').value=await f.text();status(`Прочитан файл: ${f.name}`);}});
+  bind('#mn-legacy-deep','click',async()=>{const n=mn.currentArchive()?.chunks?.length||0;if(!n)throw Error('Сначала импортируй Memory Book.');if(!window.confirm(`Архивариус дополнительно проиндексирует ${n} фрагментов старой Memory Book с оплатой запросов к выбранной модели. Продолжить?`))return;status('Разбираю наследие небольшими порциями; ошибки JSON будут автоматически перепроверены…');const v=await mn.processLegacy();status(`Готово: ${v.batches} пакетов, ${v.facts} новых фактов`);updateChat();});
+  bind('#mn-legacy-rebuild','click',async()=>{
+    const n=mn.currentArchive()?.chunks?.length||0;
+    if(!n)throw Error('Сначала импортируй Memory Book.');
+    if(!window.confirm(`Повторно обработать ${n} фрагментов старой книги? Это платные запросы архивариусу. Пока не завершится ВСЯ книга, прежние записи останутся нетронутыми. Перед запуском скачай полный архив.`))return;
+    status('Провожу полную переразметку. Результаты сохраняются по частям; старые записи пока не меняются…');
+    const result=await mn.processLegacy({rebuild:true});
+    status(`Полная переразметка завершена: ${result.total} структурированных записей. Оригинал сохранён.`);updateChat();
+  });
+  bind('#mn-import','click',async()=>{const text=getInput();if(!text.trim())throw Error('Выбери Memory Book, вставь текст или загрузите файл.');
+    const chunks=splitMemoryBook(text);if(!window.confirm(`Импортировать ${chunks.length} разделов/фрагментов? Оригинал сохранится целиком; Summarize не изменится.`))return;
+    const r=await mn.importLegacy(text,$('#mn-import-name').value.trim()||'Memory Book');
+    status(r.duplicate?'Эта версия уже импортирована':`Готово: ${r.count} записей сохранено с оригиналом; ошибок покрытия: ${r.missing.length}`);updateChat();});
+  bind('#mn-check','click',async()=>{const r=await mn.checkHealth();$('#mn-diagnostics').textContent=JSON.stringify(r,null,2);status(r.valid?'Проверка целостности пройдена.':'Обнаружены проблемы, смотри диагностику.',!r.valid);});
+  bind('#mn-search','input',()=>{const a=mn.currentArchive();const q=$('#mn-search').value.trim();const output=$('#mn-results');output.replaceChildren();if(!a||q.length<3)return;
+    const words=q.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    const sourceHits=a.sources.filter(x=>words.every(w=>x.raw.toLocaleLowerCase().includes(w))).slice(-10).reverse();
+    const memoryHits=retrieve(a,q,{maxCharacters:3200,maxItems:8});
+    for(const match of memoryHits){const div=document.createElement('div');div.className='mn-hit';div.textContent=match.text;output.append(div);}
+    for(const match of sourceHits){
+      const label=`Исходник ${match.id} · ${match.role} ${match.active?'(активный свайп)':'(архивная версия)'}`;
+      output.append(makeRecordRow(label,match.raw));
+    }
+  });
+  document.addEventListener('mnemosyne:status',()=>{renderLog();updateChat();});
+  document.addEventListener('mnemosyne:injected',()=>updateChat());
+  document.addEventListener('mnemosyne:updated',event=>notifyMemoryUpdated(event.detail?.message,mn.settings().successNotifications));
+  renderProfiles();switchTab('archive');updateChat();
 }
 
-// 2. Транзишены в основном тексте
-function formatMainTextTransitions(mesElement) {
-    const mesText = mesElement.querySelector('.mes_text');
-    if (!mesText) return;
-
-    // Транзишены могут быть разбиты HTML-разметкой на
-    // несколько текстовых узлов.
-    // Пробел U+2800 тоже поддерживается.
-
-    const KEYS = [
-        'TIMESKIP',
-        'DATE CHANGE',
-        'TIME OF DAY CHANGE',
-        'WEATHER CHANGE',
-        'LOCATION CHANGE',
-        'POV CHANGE',
-        'INTERLUDE',
-        'MEANWHILE',
-        'FLASHBACK',
-        'DREAM',
-        'MEMORY',
-        'DISPLAY',
-        'WORLDBUILDING',
-        'RUMOR',
-        'NEWS',
-        'FORESHADOW',
-        'SPECULATION',
-        'FACTS',
-        'TRIVIA',
-        'DIARY',
-        'NOTE',
-        'LETTER'
-    ];
-
-    const keyPattern = KEYS
-        .sort((a, b) => b.length - a.length)
-        .join('|');
-
-    const transitionPattern = new RegExp(
-        `\\[\\s*(${keyPattern})\\s*(?:[-–—:]\\s*([^\\]\\r\\n]{1,250}))?\\]`,
-        'gi'
-    );
-
-    const paperPattern =
-        /\{(?:diary|letter)\|[^}\r\n]+\}|\{note\s+[^}\r\n]+\}/gi;
-
-    // НОВОЕ:
-    // Произвольные заголовки сцен в квадратных скобках.
-    // Например:
-    // [День выпуска и распределения по командам]
-    //
-    // Скобки должны занимать отдельную строку.
-
-    const sceneTitlePattern =
-        /^[ \t]*\[([^\[\]\r\n]{2,180})\][ \t]*\r?$/gm;
-
-    const protectedSelector =
-        'details, pre, code, .st-scene-divider, .st-paper-card';
-
-    // Разделяем сообщение на логические текстовые области.
-
-    const scopes = new Map();
-
-    const walker = document.createTreeWalker(
-        mesText,
-        NodeFilter.SHOW_TEXT,
-        {
-            acceptNode(node) {
-                if (
-                    !node.parentElement ||
-                    node.parentElement.closest(protectedSelector)
-                ) {
-                    return NodeFilter.FILTER_REJECT;
-                }
-
-                return NodeFilter.FILTER_ACCEPT;
-            }
-        }
-    );
-
-    let node;
-
-    while ((node = walker.nextNode())) {
-        const parent = node.parentElement;
-
-        const scope =
-            parent.closest('p, li, blockquote') ||
-            parent.closest('section, article, ru, div') ||
-            mesText;
-
-        if (!scopes.has(scope)) {
-            scopes.set(scope, []);
-        }
-
-        scopes.get(scope).push(node);
-    }
-
-    // Создание красивого разделителя
-
-    function createTransition(type, description) {
-        const el = document.createElement('div');
-        el.className = 'st-scene-divider';
-
-        const inner = document.createElement('span');
-
-        if (
-            description &&
-            description.trim().toUpperCase() === 'END'
-        ) {
-            el.classList.add('st-scene-end');
-            inner.textContent = '✦';
-        } else {
-            inner.append('✦ ');
-
-            const showType = ![
-                'TIMESKIP',
-                'LOCATION CHANGE',
-                'TIME OF DAY CHANGE',
-                'DATE CHANGE',
-                'WEATHER CHANGE',
-                'SCENE'
-            ].includes(type) || !description;
-
-            if (showType) {
-                const label = document.createElement('span');
-                label.className = 'st-trans-tag';
-
-                label.textContent = description
-                    ? `${type} ·`
-                    : type;
-
-                inner.appendChild(label);
-
-                if (description) {
-                    inner.append(' ');
-                }
-            }
-
-            if (description) {
-                inner.append(
-                    document.createTextNode(description.trim())
-                );
-            }
-
-            inner.append(' ✦');
-        }
-
-        el.appendChild(inner);
-        return el;
-    }
-
-    // Оформление дневников, писем и записок
-
-    function createPaper(token) {
-        const isNote = /^\{note\s/i.test(token);
-
-        const card = document.createElement('div');
-        card.className = 'st-paper-card';
-
-        if (isNote) {
-            const body = document.createElement('div');
-            body.className = 'st-paper-body';
-
-            body.textContent =
-                `✦ ${token.slice(1, -1)
-                    .replace(/^note\s+/i, '')
-                    .trim()}`;
-
-            card.appendChild(body);
-        } else {
-            const fields = token
-                .slice(1, -1)
-                .split('|')
-                .slice(1)
-                .map(s => s.trim());
-
-            const [
-                date = '',
-                content = '',
-                loc = '',
-                sign = ''
-            ] = fields;
-
-            const header = document.createElement('div');
-            header.className = 'st-paper-header';
-
-            const left = document.createElement('span');
-            left.textContent = `✦ ${date}`;
-
-            const right = document.createElement('span');
-            right.textContent = loc;
-
-            header.append(left, right);
-
-            const body = document.createElement('div');
-            body.className = 'st-paper-body';
-            body.textContent = content;
-
-            card.append(header, body);
-
-            if (sign) {
-                const signature = document.createElement('div');
-                signature.className = 'st-paper-sign';
-
-                signature.textContent = `— ${sign}`;
-                card.appendChild(signature);
-            }
-        }
-
-        return card;
-    }
-
-    // Обработка всех текстовых областей сообщения
-
-    for (const [scope, nodes] of scopes) {
-        const originalText = nodes
-            .map(n => n.nodeValue)
-            .join('');
-
-        if (
-            !originalText.includes('[') &&
-            !originalText.includes('{')
-        ) {
-            continue;
-        }
-
-        // Нормализация U+2800 только для поиска.
-        // Исходный текст сообщения не меняется.
-
-        const text = originalText.replace(/\u2800/g, ' ');
-
-        const matches = [];
-
-        // Существующие именованные транзишены
-
-        transitionPattern.lastIndex = 0;
-
-        for (const m of text.matchAll(transitionPattern)) {
-            const type = m[1]
-                .replace(/\s+/g, ' ')
-                .trim()
-                .toUpperCase();
-
-            const description = m[2]
-                ? m[2].trim()
-                : '';
-
-            matches.push({
-                start: m.index,
-                end: m.index + m[0].length,
-                element:
-                    ['DIARY', 'NOTE', 'LETTER'].includes(type) &&
-                    !description
-                        ? null
-                        : createTransition(type, description)
-            });
-        }
-
-        // Дневники, записки и письма
-
-        paperPattern.lastIndex = 0;
-
-        for (const m of text.matchAll(paperPattern)) {
-            matches.push({
-                start: m.index,
-                end: m.index + m[0].length,
-                element: createPaper(m[0])
-            });
-        }
-
-        // НОВОЕ:
-        // Произвольные [заголовки сцен].
-        //
-        // Работает и для сообщений пользователя.
-        // Не перехватывает уже найденные переходы.
-
-        sceneTitlePattern.lastIndex = 0;
-
-        for (const m of text.matchAll(sceneTitlePattern)) {
-            const title = m[1].trim();
-
-            if (
-                !/[\p{L}]/u.test(title) ||
-                /^(?:x| |-|PASS|WARN|N\/A)$/i.test(title)
-            ) {
-                continue;
-            }
-
-            const start =
-                m.index + m[0].indexOf('[');
-
-            const end =
-                m.index + m[0].lastIndexOf(']') + 1;
-
-            // Защита от двойного оформления
-
-            if (
-                matches.some(existing =>
-                    start < existing.end &&
-                    end > existing.start
-                )
-            ) {
-                continue;
-            }
-
-            matches.push({
-                start,
-                end,
-                element: createTransition('SCENE', title)
-            });
-        }
-
-        if (!matches.length) continue;
-
-        matches.sort((a, b) => b.start - a.start);
-
-        // Поиск позиции символа среди текстовых узлов
-
-        function locate(offset, endBoundary) {
-            let cursor = 0;
-
-            for (let i = 0; i < nodes.length; i++) {
-                const length = nodes[i].nodeValue.length;
-
-                if (
-                    offset < cursor + length ||
-                    (
-                        endBoundary &&
-                        offset === cursor + length
-                    )
-                ) {
-                    return {
-                        node: nodes[i],
-                        offset: offset - cursor
-                    };
-                }
-
-                cursor += length;
-            }
-
-            const last = nodes[nodes.length - 1];
-
-            return {
-                node: last,
-                offset: last.nodeValue.length
-            };
-        }
-
-        // Замены справа налево
-
-        for (const match of matches) {
-            const from = locate(match.start, false);
-            const to = locate(match.end, true);
-
-            if (
-                !from.node.isConnected ||
-                !to.node.isConnected
-            ) {
-                continue;
-            }
-
-            const range = document.createRange();
-
-            range.setStart(from.node, from.offset);
-            range.setEnd(to.node, to.offset);
-
-            // Если весь абзац состоит из перехода,
-            // заменяем абзац целиком.
-
-            if (
-                match.element &&
-                scope.tagName === 'P' &&
-                text.trim() ===
-                    text.slice(match.start, match.end).trim()
-            ) {
-                scope.replaceWith(match.element);
-                break;
-            }
-
-            range.deleteContents();
-
-            if (match.element) {
-                range.insertNode(match.element);
-            }
-        }
-    }
+/** Asynchronous generation interceptor: independent archive queries and prompt injection. */
+globalThis.solaMnemosyneBeforeGeneration=async (_chat,_contextSize,_abort,type)=>{
+  try{await mn.beforeGeneration(type);}catch(e){console.error('[Mnemosyne] interceptor',e);}
+};
+
+async function init(){initNotifications();await initUI();const c=SillyTavern.getContext();
+  const events=c.event_types,source=c.eventSource;
+  source.on(events.CHAT_CHANGED,async()=>{try{recapShown=30;visibleShelfChanges=new Map();await mn.openChat();updateChat();}catch(e){displayError(e);}});
+  source.on(events.MESSAGE_RECEIVED,async()=>{try{await mn.archiveEvent();const a=mn.currentArchive();const count=a?.sources.filter(s=>s.active&&s.role==='assistant').length??0;
+    if(mn.settings().autoUpdate&&mn.settings().profileId&&a){mn.maybeAutoProcess().then(updateChat).catch(displayError);}
+    updateChat();}catch(e){displayError(e);}});
+  for(const name of ['MESSAGE_EDITED','MESSAGE_SWIPED','MESSAGE_DELETED'])if(events[name])source.on(events[name],async()=>{
+    try{await mn.fullRescan();updateChat();}catch(e){displayError(e);}
+  });
+  try{await mn.openChat();}catch(e){displayError(e);}
+  updateChat();
 }
-
-// 3. Счётчик токенов и статистика сообщений
-
-async function renderMessageStats(messageId) {
-    const context = getContext();
-
-    if (
-        !context ||
-        !context.chat ||
-        !context.chat[messageId]
-    ) {
-        return;
-    }
-
-    const message = context.chat[messageId];
-
-    const mesElement = document.querySelector(
-        `.mes[mesid="${messageId}"]`
-    );
-
-    if (!mesElement) return;
-
-    // Оформление работает и для пользовательских сообщений
-
-    highlightRecapBrackets(mesElement);
-    formatMainTextTransitions(mesElement);
-
-    // Но токеновая статистика добавляется только AI
-
-    if (message.is_user) return;
-
-    const rawText = message.mes || "";
-
-    // Общее число токенов
-
-    let totalTokens = message.extra?.token_count;
-
-    if (!totalTokens || totalTokens <= 2) {
-        try {
-            totalTokens = await getTokenCountAsync(rawText);
-        } catch {
-            totalTokens = Math.round(rawText.length / 3.5);
-        }
-    }
-
-    // Подсчёт токенов в recap
-
-    const enRegex = /<en>([\s\S]*?)<\/en>/gi;
-
-    let match;
-    let enContent = "";
-
-    while ((match = enRegex.exec(rawText)) !== null) {
-        enContent += match[1] + "\n";
-    }
-
-    let recapTokens = 0;
-
-    if (enContent.trim().length > 0) {
-        try {
-            recapTokens = await getTokenCountAsync(
-                enContent.trim()
-            );
-        } catch {
-            recapTokens = Math.round(
-                enContent.trim().length / 4
-            );
-        }
-    }
-
-    // Название модели
-
-    const rawModel =
-        message.extra?.model ||
-        message.gen_model ||
-        message.extra?.api ||
-        "";
-
-    const modelName = cleanModelName(rawModel);
-
-    // Статистика возле имени
-
-    let badge = mesElement.querySelector(
-        '.st-recap-meta-badge'
-    );
-
-    if (!badge) {
-        badge = document.createElement('div');
-        badge.className = 'st-recap-meta-badge';
-
-        const chName = mesElement.querySelector('.ch_name');
-
-        if (!chName) return;
-
-        chName.insertAdjacentElement(
-            'beforeend',
-            badge
-        );
-    }
-
-    const parts = [];
-
-    if (recapTokens > 0) {
-        parts.push(
-            `<span>${totalTokens}t (recap: ${recapTokens}t)</span>`
-        );
-    } else {
-        parts.push(`<span>${totalTokens}t</span>`);
-    }
-
-    if (modelName) {
-        parts.push(
-            `<span title="${rawModel}">${modelName}</span>`
-        );
-    }
-
-    badge.innerHTML =
-        `<span style="opacity:0.5;">·</span> ` +
-        parts.join(
-            ` <span style="opacity:0.5;">·</span> `
-        );
-}
-
-// 4. Оформление всех видимых сообщений
-
-function processVisibleMessages() {
-    const mesElements =
-        document.querySelectorAll('#chat .mes[mesid]');
-
-    mesElements.forEach(el => {
-        // Обрабатываем сообщения независимо от того,
-        // добавлен ли уже счётчик токенов.
-
-        highlightRecapBrackets(el);
-        formatMainTextTransitions(el);
-
-        if (!el.querySelector('.st-recap-meta-badge')) {
-            const id = Number(
-                el.getAttribute('mesid')
-            );
-
-            if (!isNaN(id)) {
-                renderMessageStats(id);
-            }
-        }
-    });
-}
-
-// 5. Подключение к событиям SillyTavern
-
-jQuery(() => {
-    eventSource.on(
-        event_types.CHAT_CHANGED,
-        () => setTimeout(processVisibleMessages, 300)
-    );
-
-    eventSource.on(
-        event_types.MESSAGE_RECEIVED,
-        id => setTimeout(
-            () => renderMessageStats(id),
-            500
-        )
-    );
-
-    eventSource.on(
-        event_types.MESSAGE_UPDATED,
-        id => setTimeout(
-            () => renderMessageStats(id),
-            300
-        )
-    );
-
-    eventSource.on(
-        event_types.MESSAGE_SWIPED,
-        id => setTimeout(
-            () => renderMessageStats(id),
-            300
-        )
-    );
-
-    eventSource.on(
-        event_types.CHARACTER_MESSAGE_RENDERED,
-        id => setTimeout(
-            () => renderMessageStats(id),
-            600
-        )
-    );
-
-    if (event_types.GENERATION_ENDED) {
-        eventSource.on(
-            event_types.GENERATION_ENDED,
-            () => {
-                const context = getContext();
-
-                if (
-                    context &&
-                    context.chat &&
-                    context.chat.length > 0
-                ) {
-                    setTimeout(
-                        () => renderMessageStats(
-                            context.chat.length - 1
-                        ),
-                        400
-                    );
-                }
-            }
-        );
-    }
-
-    // Обнаружение новых сообщений в DOM
-
-    const chatEl = document.getElementById('chat');
-
-    if (chatEl) {
-        const observer = new MutationObserver(() => {
-            processVisibleMessages();
-        });
-
-        observer.observe(chatEl, {
-            childList: true
-        });
-    }
-
-    // Первоначальная обработка
-
-    setTimeout(processVisibleMessages, 800);
-});
+init().catch(e=>{console.error('[Mnemosyne] Could not initialize',e);});

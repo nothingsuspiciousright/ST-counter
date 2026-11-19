@@ -1,0 +1,78 @@
+<section id="mnemosyne-panel" class="mn-theme">
+  <details class="mn-root" open>
+    <summary class="mn-top"><span class="mn-symbol">✦</span><span><strong>Sola Mnemosyne</strong><small>Глубокая память · архивариус</small></span><span class="mn-version">v0.3.8</span></summary>
+    <div class="mn-body">
+      <p class="mn-subtle">Независима от Summarize, векторов и лорбуков. Исходная история сохраняется; в контекст передаются выбранные записи.</p>
+      <nav class="mn-tabs">
+        <button type="button" data-tab="archive" class="current">Память</button>
+        <button type="button" data-tab="import">Наследие</button>
+        <button type="button" data-tab="diagnostics">Диагностика</button>
+      </nav>
+      <div id="mn-status" role="status" aria-live="polite">Готово к настройке.</div>
+      <section data-page="archive">
+        <label class="mn-check"><input id="mn-enabled" type="checkbox"/> <strong>Добавлять память в контекст RP</strong></label>
+        <label class="mn-check"><input id="mn-auto-update" type="checkbox" checked/> <strong>Автоматически обновлять воспоминания</strong></label>
+        <label class="mn-field">Профиль дешёвого архивариуса
+          <select id="mn-profile" class="text_pole"></select>
+        </label>
+        <p class="mn-hint">Используй отдельный Connection Profile (например, Flash-Lite). Основная модель отыгрыша не переключается, API-ключ в Mnemosyne не вводится.</p>
+        <div class="mn-grid">
+          <label class="mn-field">Обновлять каждые N ответов <input id="mn-interval" type="number" min="1" max="200" value="40" class="text_pole"/></label>
+          <label class="mn-field">Бюджет контекста (примерно, токены) <input id="mn-budget" type="number" min="300" max="12000" step="100" value="2400" class="text_pole"/></label>
+        </div>
+        <label class="mn-check"><input id="mn-auto-backup" type="checkbox" checked/> <span>Автоматически сохранять копии на сервер SillyTavern</span></label>
+        <label class="mn-check"><input id="mn-success-notifications" type="checkbox" checked/> <span>Тихое уведомление об успешном обновлении памяти</span></label>
+        <p class="mn-hint">Маленькая серебряная плашка на 3 секунды. Без звука и вибрации; только после сохранения обработанной памяти, не после каждого сообщения.</p>
+        <p class="mn-hint">Память работает незаметно: факты поддерживают непрерывность сюжета, но сами по себе не вызывают флешбеки. Старые сцены извлекаются при конкретной связи с текущим постом или явном воспоминании.</p>
+        <div id="mn-overview" class="mn-stat"></div>
+        <div class="mn-actions">
+          <button id="mn-scan" type="button" class="menu_button">Обновить архив из чата</button>
+          <button id="mn-extract" type="button" class="menu_button">Обработать новые события</button>
+        </div>
+        <div class="mn-actions">
+          <button id="mn-sync-now" type="button" class="menu_button">Копия на сервере</button>
+          <button id="mn-export" type="button" class="menu_button">Скачать полный архив</button>
+        </div>
+        <div id="mn-sync" class="mn-hint"></div>
+        <div id="mn-injection" class="mn-hint"></div>
+        <label class="mn-field">Поиск (включая исходные сообщения и старые свайпы)
+          <input id="mn-search" type="search" placeholder="Имя, предмет, старая реплика…" class="text_pole"/>
+        </label>
+        <div id="mn-results" class="mn-results"></div>
+        <h4>Полочки памяти</h4><p class="mn-hint">Тематические полочки содержат отдельные факты архивариуса. Полочка «Полные recap» показывает текст каждого сохранённого recap целиком, непосредственно из оригинального сообщения, без нового пересказа или оплаты API. Оригинал старой книги находится во вкладке «Наследие».</p><div id="mn-shelves" class="mn-shelves"></div>
+        <div id="mn-records" class="mn-record-list"></div>
+      </section>
+      <section data-page="import" hidden>
+        <h4>Наследие памяти · Memory Inheritance</h4>
+        <p class="mn-subtle">Одноразовый перенос старой Memory Book. Книга и оригиналы остаются нетронутыми. Одинаковый импорт распознаётся без дублирования. Summarize выключай вручную только после проверки.</p>
+        <div class="mn-actions"><button id="mn-detect" type="button" class="menu_button">Найти Memory Book</button></div>
+        <select id="mn-detected" class="text_pole"><option value="">— источники ещё не искали —</option></select>
+        <label class="mn-field">Или загрузить Memory Book в формате TXT / MD
+          <input id="mn-import-file" type="file" accept=".txt,.md,.markdown,.json,text/plain,application/json"/>
+        </label>
+        <label class="mn-field">Название импорта<input id="mn-import-name" class="text_pole" value="Memory Book (Summarize)"/></label>
+        <label class="mn-field">Текст существующей Memory Book
+          <textarea id="mn-import-text" class="text_pole" rows="8" placeholder="Вставь текущую Memory Book…"></textarea>
+        </label>
+        <div class="mn-actions"><button id="mn-import" type="button" class="menu_button mn-primary">Разложить по полочкам и сохранить оригинал</button></div>
+        <p class="mn-hint">Первичный перенос сортирует фрагменты без API-запросов и сохраняет оригинал. Для более точной раскладки можно запустить отдельную модель архивариуса.</p>
+        <div class="mn-actions"><button id="mn-legacy-deep" type="button" class="menu_button">Глубокая разметка новых фрагментов (дешёвая модель)</button></div>
+        <div class="mn-actions"><button id="mn-legacy-rebuild" type="button" class="menu_button">Переразметить ВСЮ старую книгу по отдельным фактам</button></div>
+        <p class="mn-hint">Переразметка повторно оплачивает API-запросы. Обрабатывает книгу мелкими частями, сохраняет прогресс и заменяет старые классификации только после полного завершения. Перед запуском скачай полный архив.</p>
+        <h4>Сохранённые первоисточники</h4>
+        <label class="mn-field">Открыть оригинал Memory Book <select id="mn-original-select" class="text_pole"></select></label>
+        <textarea id="mn-original-content" class="text_pole" rows="10" readonly placeholder="Выбери импортированный источник выше"></textarea>
+      </section>
+      <section data-page="diagnostics" hidden>
+        <h4>Проверка целостности</h4>
+        <button id="mn-check" type="button" class="menu_button">Проверить все ссылки и архивы</button>
+        <pre id="mn-diagnostics" class="mn-code">Диагностика ещё не запускалась.</pre>
+        <h4>Восстановление из полной резервной копии</h4>
+        <p class="mn-hint">Внимание: замена архива из JSON требует подтверждения. Перед восстановлением скачай текущую копию.</p>
+        <input type="file" id="mn-restore" accept=".json,application/json" />
+        <h4>Журнал</h4><div id="mn-log" class="mn-log"></div>
+      </section>
+      <footer class="mn-footer">Локальное хранилище IndexedDB + резервные копии в папке пользователя SillyTavern. История других чатов изолирована. Без облака Mnemosyne и без отправки данных третьим лицам кроме выбранного архивариуса.</footer>
+    </div>
+  </details>
+</section>

@@ -1,48 +1,129 @@
-.st-recap-meta-badge {
-    display: block !important;
-    margin-left: 4px !important;
-    margin-top: -3px !important;
-    margin-bottom: 2px !important;
-    font-size: 10.5px !important;
-    font-weight: 400 !important;
-    color: var(--SmartThemeBodyColor, #ccc) !important;
-    opacity: 0.42 !important;
-    letter-spacing: 0.02em !important;
-    line-height: 1.2 !important;
-    transition: opacity 0.25s ease !important;
-    user-select: none !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
+#mnemosyne-panel { --mn-line:rgba(195,211,235,.21); --mn-ink:#dee6f4; --mn-muted:#9aaabd; --mn-glow:#d0d9ed; font-family:inherit;color:var(--mn-ink); }
+#mnemosyne-panel .mn-root { border:1px solid var(--mn-line);background:linear-gradient(145deg,rgba(58,73,101,.25),rgba(17,23,40,.13));border-radius:16px;overflow:hidden;margin:12px 0;box-shadow:0 4px 26px rgba(0,0,0,.1); }
+#mnemosyne-panel .mn-top{list-style:none;display:flex;align-items:center;gap:10px;padding:15px 13px;cursor:pointer;letter-spacing:.05em;}
+#mnemosyne-panel .mn-top::-webkit-details-marker{display:none}
+#mnemosyne-panel .mn-top strong{font:600 17px Georgia,serif;color:#f3f0f8;display:block}
+#mnemosyne-panel .mn-top small{font-size:10px;display:block;color:var(--mn-muted);letter-spacing:.07em;margin-top:3px}
+#mnemosyne-panel .mn-symbol{font-size:27px;color:var(--mn-glow);text-shadow:0 0 14px #b8c8e585}
+#mnemosyne-panel .mn-version{margin-left:auto;font:11px monospace;color:var(--mn-muted)}
+#mnemosyne-panel .mn-body{padding:0 12px 16px}
+#mnemosyne-panel h4{font:600 15px Georgia,serif;margin:15px 0 9px;color:#e4e7f5}
+#mnemosyne-panel .mn-subtle,#mnemosyne-panel .mn-hint,#mnemosyne-panel .mn-footer{color:var(--mn-muted);font-size:12px;line-height:1.55}
+#mnemosyne-panel .mn-footer{border-top:1px solid var(--mn-line);margin-top:15px;padding-top:12px}
+#mnemosyne-panel .mn-tabs{display:flex;gap:5px;border-bottom:1px solid var(--mn-line);padding:8px 0 10px;margin-bottom:9px;}
+#mnemosyne-panel .mn-tabs button{border:0;border-radius:9px;padding:9px 11px;background:transparent;color:#b3c3d7;cursor:pointer;}
+#mnemosyne-panel .mn-tabs button.current{background:#bac7dc20;color:#e8f3ff;box-shadow:inset 0 0 0 1px var(--mn-line);}
+#mnemosyne-panel #mn-status{background:#adbed00e;border-left:2px solid #adbed070;font-size:12px;padding:9px;border-radius:5px;margin:8px 0 13px;min-height:16px;overflow-wrap:anywhere;}
+#mnemosyne-panel #mn-status[data-level="error"]{border-color:#d48282;color:#ffb5b5}
+#mnemosyne-panel .mn-check{display:flex;align-items:center;gap:8px;margin:12px 0;font-size:13px;line-height:1.4;}
+#mnemosyne-panel .mn-check input{flex:none}
+#mnemosyne-panel .mn-field{display:flex;flex-direction:column;gap:6px;margin:10px 0;color:#c8d6e6;font-size:12px;}
+#mnemosyne-panel .mn-field select,#mnemosyne-panel .mn-field input,#mnemosyne-panel .mn-field textarea,#mnemosyne-panel select{width:100%;min-width:0;box-sizing:border-box;border-radius:8px;padding:8px;background:#0d18285c;color:#ebf1fc;border:1px solid var(--mn-line);}
+#mnemosyne-panel .mn-field textarea{resize:vertical;min-height:120px}
+#mnemosyne-panel .mn-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+#mnemosyne-panel .mn-actions{display:flex;gap:7px;flex-wrap:wrap;margin:9px 0}
+#mnemosyne-panel .mn-actions button,#mnemosyne-panel #mn-check{flex:1 1 145px;border:1px solid var(--mn-line);border-radius:8px;min-height:35px;font-size:12px;line-height:1.2;padding:8px;background:#809bb61e;color:#e6ecf8;white-space:normal}
+#mnemosyne-panel .mn-actions button:hover{background:#809bb638}
+#mnemosyne-panel .mn-actions .mn-primary{background:#bdcde82b}
+#mnemosyne-panel .mn-stat{border:1px solid var(--mn-line);background:#adbed010;padding:9px;font-size:12px;border-radius:8px;margin-top:12px;}
+#mnemosyne-panel .mn-shelves{display:flex;gap:5px;flex-wrap:wrap;margin:8px 0}
+#mnemosyne-panel .mn-chip{font-size:11px;background:#a3b7ce17;border:1px solid var(--mn-line);color:#c6d5e7;padding:5px 8px;border-radius:99px;cursor:pointer}
+#mnemosyne-panel .mn-chip.current{background:#b8c9e84a;color:#fff}
+/* Private, theme-resistant disclosure rows for long memory passages. */
+#mnemosyne-panel .mn-record-list{
+  display:block;box-sizing:border-box;min-width:0;width:100%;
+  max-height:min(420px,55vh);overflow-y:auto;overflow-x:hidden;
+  overscroll-behavior:contain;scrollbar-gutter:stable;
 }
+#mnemosyne-panel .mn-record{
+  display:block;box-sizing:border-box;position:static;float:none;clear:both;
+  min-width:0;max-width:100%;height:auto;min-height:0;
+  border-bottom:1px solid var(--mn-line);padding:7px 3px;
+  font-size:12px;overflow:visible;
+}
+#mnemosyne-panel .mn-record-toggle{
+  display:block;box-sizing:border-box;position:static;float:none;
+  width:100%;min-width:0;max-width:100%;height:auto;min-height:0;
+  margin:0;padding:5px 5px 5px 21px;
+  border:0;border-radius:5px;background:transparent;box-shadow:none;
+  color:inherit;font:inherit;font-size:12px;line-height:1.5;
+  cursor:pointer;white-space:normal;text-align:left;
+  overflow-wrap:anywhere;word-break:normal;
+}
+#mnemosyne-panel .mn-record-toggle::before{
+  content:'▸';display:inline-block;position:static;float:left;
+  width:16px;margin-left:-19px;color:var(--mn-muted);
+}
+#mnemosyne-panel .mn-record-toggle[aria-expanded="true"]::before{content:'▾'}
+#mnemosyne-panel .mn-record-toggle:hover,#mnemosyne-panel .mn-record-toggle:focus-visible{
+  background:rgba(190,208,233,.09);
+}
+#mnemosyne-panel .mn-record-content{
+  display:block;box-sizing:border-box;position:static;float:none;clear:both;
+  min-width:0;width:100%;max-width:100%;height:auto;
+  padding:4px 0 7px 12px;overflow:visible;
+}
+#mnemosyne-panel .mn-record-content[hidden]{display:none!important}
+#mnemosyne-panel .mn-record-text,#mnemosyne-panel .mn-code{
+  display:block;box-sizing:border-box;position:static;float:none;clear:both;
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;
+  font:11px/1.55 ui-monospace,monospace;margin:5px 0 0;
+  padding:10px;background:#0b142385;color:#c7d7ea;border-radius:8px;
+  min-width:0;width:100%;max-width:100%;height:auto;
+  max-height:260px;overflow:auto;overscroll-behavior:contain;
+}
+#mnemosyne-panel .mn-meta{
+  display:block;position:static;white-space:normal;
+  margin:7px 0;color:var(--mn-muted);
+  font:11px/1.5 monospace;overflow-wrap:anywhere;
+}
+#mnemosyne-panel [data-page][hidden]{display:none!important}
+#mnemosyne-panel .mn-results{max-height:350px;overflow:auto}
+#mnemosyne-panel .mn-hit{font-size:12px;padding:7px;border-bottom:1px solid var(--mn-line);overflow-wrap:anywhere}
+#mnemosyne-panel .mn-log{max-height:220px;overflow:auto}
+#mnemosyne-panel .mn-log-line{font:11px/1.5 monospace;color:#b3c9e1;border-bottom:1px solid var(--mn-line);padding:5px 0;overflow-wrap:anywhere}
+#mnemosyne-panel .mn-log-line.error{color:#ffb6b6}
+@media(max-width:480px){#mnemosyne-panel .mn-grid{grid-template-columns:1fr}#mnemosyne-panel .mn-tabs button{padding:8px 7px;font-size:12px}}
 
-.st-recap-meta-badge:hover {
-    opacity: 0.85 !important;
+/* Subtle success notification: separate from chat layout, click to dismiss. */
+#mnemosyne-toast.mn-toast {
+  position:fixed; z-index:1050; right:max(14px,env(safe-area-inset-right));
+  bottom:max(20px,calc(env(safe-area-inset-bottom) + 14px));
+  display:flex;gap:9px;align-items:center;max-width:min(340px,calc(100vw - 28px));
+  box-sizing:border-box;padding:10px 13px;border:1px solid rgba(205,219,240,.28);
+  border-radius:13px;color:#e5edf8;font:12px/1.5 system-ui,sans-serif;
+  background:linear-gradient(110deg,rgba(34,45,68,.94),rgba(50,63,82,.91));
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  box-shadow:0 5px 22px rgba(0,0,0,.15);
+  opacity:0;visibility:hidden;transform:translateY(9px);pointer-events:none;
+  transition:opacity .24s ease,transform .24s ease,visibility .24s;
 }
+#mnemosyne-toast.mn-toast.mn-toast-visible{opacity:1;visibility:visible;transform:translateY(0);pointer-events:auto;}
+#mnemosyne-toast .mn-toast-glyph{font-size:17px;color:#cddbf1;opacity:.9}
+#mnemosyne-toast .mn-toast-content{overflow-wrap:anywhere}
+@media (prefers-reduced-motion:reduce){#mnemosyne-toast.mn-toast{transition:none;transform:none}}
+@media(max-width:480px){#mnemosyne-toast.mn-toast{right:12px;bottom:max(15px,env(safe-area-inset-bottom));max-width:min(300px,calc(100vw - 24px));font-size:11px}}
 
-@media screen and (max-width: 768px) {
-    .st-recap-meta-badge {
-        font-size: 9.5px !important;
-        margin-top: -4px !important;
-    }
-}
-/* Убираем двойные кавычки "" внутри рекапа (оставляем только одни родные!) */
-.mes_text details q::before,
-.mes_text details q::after {
-    content: none !important;
-    display: none !important;
-}
+/* Per-chat unread indicators; these are cleared per shelf only when opened. */
+#mnemosyne-panel .mn-chip{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;}
+#mnemosyne-panel .mn-unread{display:inline-flex;white-space:nowrap;align-items:center;
+  font:600 10px/1.35 system-ui,sans-serif;border-radius:99px;padding:2px 6px;
+  box-sizing:border-box;border:1px solid transparent;}
+#mnemosyne-panel .mn-unread-new,#mnemosyne-panel .mn-record-marker-new{
+  color:#e4efff;border-color:rgba(184,210,245,.34);background:rgba(165,194,228,.16);}
+#mnemosyne-panel .mn-unread-changed,#mnemosyne-panel .mn-record-marker-changed{
+  color:#f5deab;border-color:rgba(224,186,119,.34);background:rgba(200,161,98,.15);}
+#mnemosyne-panel .mn-record-new{border-left:2px solid rgba(175,207,246,.65);padding-left:7px;
+  background:linear-gradient(90deg,rgba(176,206,248,.065),transparent 70%);}
+#mnemosyne-panel .mn-record-changed{border-left:2px solid rgba(235,195,118,.65);padding-left:7px;
+  background:linear-gradient(90deg,rgba(223,182,111,.07),transparent 70%);}
+#mnemosyne-panel .mn-record-marker{display:inline-block;box-sizing:border-box;
+  font:600 10px/1.4 system-ui,sans-serif;border:1px solid transparent;
+  padding:2px 6px;margin:0 0 0 8px;border-radius:99px;vertical-align:middle;}
 
-/* Бледное изящное выделение транзишенов [...] внутри рекапа */
-.mes_text details .st-recap-bracket {
-    color: rgba(255, 255, 255, 0.92) !important;
-    background: rgba(255, 255, 255, 0.07) !important;
-    border: 1px solid rgba(255, 255, 255, 0.14) !important;
-    border-radius: 4px !important;
-    padding: 0px 5px !important;
-    margin: 0 1px !important;
-    font-size: 0.92em !important;
-    letter-spacing: 0.02em !important;
-    box-decoration-break: clone;
-    -webkit-box-decoration-break: clone;
-}
+/* Load full recaps in small batches, avoiding huge DOM lists in long chats. */
+#mnemosyne-panel .mn-show-more {display:block;box-sizing:border-box;width:100%;
+  margin:8px 0 3px;padding:10px 12px;border:1px solid var(--mn-line);
+  border-radius:8px;background:rgba(167,190,219,.13);color:var(--mn-ink);
+  cursor:pointer;font-size:12px;}
+#mnemosyne-panel .mn-show-more:hover{background:rgba(167,190,219,.23)}

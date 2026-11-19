@@ -1,10 +1,14 @@
 {
-    "display_name": "Recap & Model Stats",
-    "loading_order": 100,
-    "requires": [],
-    "optional": [],
-    "js": "index.js",
-    "css": "style.css",
-    "author": "Custom",
-    "version": "1.0.0"
+  "display_name": "Sola Mnemosyne · Deep Memory",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "dependencies": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Sola Mnemosyne",
+  "version": "0.3.8",
+  "minimum_client_version": "1.13.0",
+  "auto_update": false,
+  "generate_interceptor": "solaMnemosyneBeforeGeneration"
 }
