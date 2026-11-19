@@ -24,6 +24,6 @@ test('reasoning-friendly completion retry expands but never exceeds configured c
 
 test('chat extraction requests concise JSON and still includes source identifiers',()=>{
   const prompt=extractionPrompt([{id:'mX',role:'assistant',name:'Agent Alpha',raw:'A gate in Zone C was opened.'}]);
-  assert.match(prompt[0].content,/Max 20 atomic facts/);
+  assert.match(prompt[0].content,/Extract up to 50 distinct durable facts/);
   assert.match(prompt[1].content,/mX/);
 });

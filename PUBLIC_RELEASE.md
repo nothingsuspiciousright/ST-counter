@@ -1,18 +1,20 @@
-# Sola Mnemosyne v0.3.11 — safe per-chat full reset
+# Sola Mnemosyne v0.3.12 — GitHub release
 
-- Adds a destructive **full reset** for only the currently opened RP chat,
-  with a warning and mandatory `СБРОС` typed confirmation.
-- Creates and binds a brand-new empty archive before deleting the old one.
-  Removes all per-chat facts, imported books, sources, original recaps, processing
-  markers, error records and read flags from Mnemosyne. Does not delete ST chat
-  history or other chats. The main preset and archivist Connection Profile persist.
-- Attempts to delete this exact archive's last known server backup. An error is
-  surfaced if IndexedDB or server cleanup is incomplete. Existing private JSON
-  exports downloaded on the user's device cannot be removed by the extension.
-- A reset remains empty across reloads: no automatic refill or paid extraction starts until the first explicit rescan.
-- To rebuild, explicitly scan the current chat and start extracting facts, then
-  optionally reimport the old Memory Book. No silent mass API operation begins
-  after reset.
-- Full reset cannot be undone except by importing a prior private backup.
+Independent SillyTavern RP memory extension with optional cheaper archivist profile.
 
-**Public code contains no private RP content, personal names or API keys.**
+## Changes
+
+- Adjustable 4K–50K approximate **input** token budget for archivist jobs, independent of RP injection budget and model output token budget.
+- Cooperative **Stop indexing** and **Resume from first unprocessed source** controls, per-chat progress, exact failed batch ID and index.
+- In-world event-date/time extraction hints and source-header date display without guessing missing dates.
+- Canonical location grouping in shelf UI while retaining all individual facts and citations in the archive.
+- Splitting large input batches on context-length errors; existing malformed-JSON recovery retained.
+- Source and full recap preservation unchanged. Public test data are synthetic.
+
+## Privacy and testing
+
+No personal roleplay exports, stored API keys or user archives are included. The code is suitable for a public GitHub repository; keep memory exports private. Pure JavaScript tests run via `npm test`. Browser integration with your specific SillyTavern build and model proxy must still be tested before relying on automatic memory or disabling Summarize. A provider can still reject or truncate large model requests; 50K is an upper bound, not a guaranteed prompt size.
+
+## Update
+
+Export your archive, replace repository files with the contents of this ZIP (manifest.json must be at repository root), update the SillyTavern extension, and refresh the page. No re-import is needed for this code update.

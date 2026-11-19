@@ -1,6 +1,6 @@
 /** Entry point. Importing this file doesn't alter a user's RP preset or chat. */
 import * as mn from './src/runtime.js';
-import {SHELVES, retrieve, validateArchive, splitMemoryBook} from './src/core.js';
+import {SHELVES, retrieve, validateArchive, splitMemoryBook, inGameStamp} from './src/core.js';
 import {initNotifications, notifyMemoryUpdated} from './src/notifications.js';
 import {recordKey} from './src/read-markers.js';
 const BASE=new URL('.',import.meta.url);
@@ -14,6 +14,10 @@ function renderProfiles(){const sel=$('#mn-profile');if(!sel)return;sel.replaceC
   for(const p of mn.connectionProfiles())sel.append(mkOption(p.id,`${p.name} · ${p.model??p.api??''}`));sel.value=mn.settings().profileId??'';
 }
 function updateChat(){const s=mn.getStats(),v=$('#mn-overview');if(!v)return;
+  const ix=s?.indexing; const stop=$('#mn-stop-index');const resume=$('#mn-resume-index');
+  if(stop)stop.disabled=!ix?.running; if(resume)resume.disabled=!!ix?.running;
+  const prog=$('#mn-index-progress');
+  if(prog)prog.textContent=ix?.progress?`Индексация: ${ix.progress.status} · ${ix.progress.completedSources??0}/${ix.progress.totalSources??'?'} исходников${ix.lastError?' · ошибка на сообщении #'+(ix.lastError.firstMessageIndex+1):''}`:'Индексация не запускалась.';
   v.textContent=s?.awaitingManualScan?'Память этого чата очищена. Для нового прохода сначала нажми «Обновить архив из чата».':s?`Источников: ${s.sourceCount} · фактов: ${s.factCount} · фрагментов оригинала: ${s.chunkCount} · импортов: ${s.imports} · заблокированных пакетов: ${s.blockedBatches} · новых ответов до автообновления: ${Math.max(0,s.batchEvery-s.pending)} · ${s.valid?'целостность OK':'ОШИБКИ'}`:'Открой сохранённый чат для работы с памятью.';
   renderOriginals();
   $('#mn-sync').textContent=s?.lastSync?`Снимок сервера: ${new Date(s.lastSync).toLocaleString()}`:'Резервная копия ещё не создана';
@@ -59,6 +63,7 @@ function renderShelves(){const parent=$('#mn-shelves');if(!parent)return;parent.
   }
   const list=$('#mn-records');list.replaceChildren();
   const allItems=mn.shelfRecords(selectedShelf);
+  const rawSourceById=new Map((mn.currentArchive()?.sources??[]).map(x=>[x.id,x.raw]));
   const items=allItems.slice(0,selectedShelf==='recaps'?recapShown:80);
   if(!items.length){list.textContent=selectedShelf==='recaps'
     ?'В архиве этого чата пока нет распознанных recap. Нажми «Обновить архив из чата»: исходные ответы будут прочитаны без обращения к архивариусу и без повторного импорта Memory Book.'
@@ -76,9 +81,10 @@ function renderShelves(){const parent=$('#mn-shelves');if(!parent)return;parent.
     const status=selectedShelf==='promises'?` · Обещание: ${promiseNames[item.promiseStatus]??'не определён'}`:
       selectedShelf==='arcs'?` · Арка: ${arcNames[item.arcStatus]??'не определён'}`:
       selectedShelf==='knowledge'?` · Кому известно: ${item.knowledge||'не установлено'} (${item.knowledgeState||'unknown'})`:'';
+    const sourceStamp=(item.sourceIds??[]).map(id=>inGameStamp(rawSourceById.get(id))).find(Boolean)||'';
     const metadata=selectedShelf==='recaps'
-      ?`Полный оригинальный recap · источник: ${item.sourceId} · свайп ${item.swipe+1} · ${item.text.length} символов${item.sourceDate?' · '+item.sourceDate:''}`
-      :`Источник: ${item.sourceIds?.join(', ')??'—'} · ${item.certainty??'неизвестно'} · ${item.lifecycle??''}${status}`;
+      ?`Полный оригинальный recap · игровое время: ${item.gameStamp||'не указано'} · источник: ${item.sourceId} · свайп ${item.swipe+1} · ${item.text.length} символов${item.sourceDate?' · сохранено: '+item.sourceDate:''}`
+      :`Дата события: ${item.eventDate||'не установлена'}${item.eventTime?' · '+item.eventTime:''}${sourceStamp&&!item.eventDate?' · сцена источника: '+sourceStamp:''}${item.placeName?' · место: '+item.placeName:''} · Источник: ${item.sourceIds?.join(', ')??'—'} · ${item.certainty??'неизвестно'} · ${item.lifecycle??''}${status}${item.mentionCount>1?' · упоминаний места: '+item.mentionCount:''}`;
     const row=makeRecordRow(summary,item.text,metadata);
     const diff=visibleShelfChanges.get(recordKey(item));
     if(diff){
@@ -135,18 +141,21 @@ async function initUI(){const container=document.querySelector('#extensions_sett
   if(!container)throw Error('SillyTavern extension settings area not found');
   const html=await fetch(new URL('./settings.html',BASE)).then(r=>{if(!r.ok)throw Error('Settings template missing');return r.text();});
   const host=document.createElement('div');host.innerHTML=html;container.append(host);
-  const s=mn.settings();$('#mn-enabled').checked=s.enabled;$('#mn-interval').value=s.batchEvery;$('#mn-budget').value=s.contextTokens;$('#mn-archivist-tokens').value=s.maxTokens;$('#mn-auto-update').checked=s.autoUpdate;$('#mn-auto-backup').checked=s.autoBackup;$('#mn-success-notifications').checked=s.successNotifications;
+  const s=mn.settings();$('#mn-enabled').checked=s.enabled;$('#mn-interval').value=s.batchEvery;$('#mn-budget').value=s.contextTokens;$('#mn-archivist-tokens').value=s.maxTokens;$('#mn-input-tokens').value=s.inputBudgetTokens;$('#mn-auto-update').checked=s.autoUpdate;$('#mn-auto-backup').checked=s.autoBackup;$('#mn-success-notifications').checked=s.successNotifications;
   for(const b of document.querySelectorAll('#mnemosyne-panel [data-tab]'))b.addEventListener('click',()=>switchTab(b.dataset.tab));
   bind('#mn-enabled','change',()=>{s.enabled=$('#mn-enabled').checked;mn.saveSettings();status(s.enabled?'Подстановка памяти включена.':'Подстановка памяти выключена.');});
   bind('#mn-profile','change',()=>{s.profileId=$('#mn-profile').value;mn.saveSettings();status('Профиль архивариуса сохранён; основная модель RP не менялась.');});
   bind('#mn-interval','change',()=>{s.batchEvery=Math.max(1,Math.min(200,Number($('#mn-interval').value)||40));$('#mn-interval').value=s.batchEvery;mn.saveSettings();});
   bind('#mn-budget','change',()=>{s.contextTokens=Math.max(300,Math.min(12000,Number($('#mn-budget').value)||2400));$('#mn-budget').value=s.contextTokens;mn.saveSettings();});
-  bind('#mn-archivist-tokens','change',()=>{s.maxTokens=Math.max(1024,Math.min(32768,Number($('#mn-archivist-tokens').value)||8192));$('#mn-archivist-tokens').value=s.maxTokens;mn.saveSettings();});
+  bind('#mn-archivist-tokens','change',()=>{s.maxTokens=Math.max(1024,Math.min(32768,Number($('#mn-archivist-tokens').value)||8192));$('#mn-archivist-tokens').value=s.maxTokens;$('#mn-input-tokens').value=s.inputBudgetTokens;mn.saveSettings();});
+  bind('#mn-input-tokens','change',()=>{s.inputBudgetTokens=Math.max(4000,Math.min(50000,Number($('#mn-input-tokens').value)||16000));$('#mn-input-tokens').value=s.inputBudgetTokens;mn.saveSettings();});
   bind('#mn-auto-update','change',()=>{s.autoUpdate=$('#mn-auto-update').checked;mn.saveSettings();status(s.autoUpdate?'Автообновление включено.':'Автообновление выключено.');});
   bind('#mn-auto-backup','change',()=>{s.autoBackup=$('#mn-auto-backup').checked;mn.saveSettings();});
   bind('#mn-success-notifications','change',()=>{s.successNotifications=$('#mn-success-notifications').checked;mn.saveSettings();});
   bind('#mn-scan','click',async()=>{await mn.fullRescan({notify:true});updateChat();});
   bind('#mn-extract','click',async()=>{status('Архивариус обрабатывает новые события…');const r=await mn.processBacklog({force:true});status(`Готово: ${r.batches} пакетов, +${r.facts} фактов, заблокировано ${r.blocked??0}. Пропуски не считаются извлечёнными фактами.`);updateChat();});
+  bind('#mn-stop-index','click',()=>{if(mn.stopIndexing())status('Остановка запрошена. Текущий запрос может завершиться, новые пакеты не запускаются.');updateChat();});
+  bind('#mn-resume-index','click',async()=>{status('Продолжаю с первого необработанного пакета…');const r=await mn.resumeIndexing();status(r.stopped?'Индексация приостановлена.':`Обработка завершена: +${r.facts??0} фактов, пропусков ${r.blocked??0}.`);updateChat();});
   bind('#mn-skip-failed','click',async()=>{
     if(!window.confirm('Пропустить один ранее ошибочный пакет? Его оригинальные сообщения останутся сохранёнными, но ФАКТЫ из них не будут извлечены. Продолжить?'))return;
     const r=await mn.skipFailedBatch();status(`Пропущен проблемный пакет ${r.id}: ${r.messages} исходников сохранены локально без разметки. Нажми «Обработать новые события», чтобы продолжить.`);updateChat();
@@ -206,6 +215,7 @@ async function initUI(){const container=document.querySelector('#extensions_sett
     }
   });
   document.addEventListener('mnemosyne:status',()=>{renderLog();updateChat();});
+  document.addEventListener('mnemosyne:indexing-changed',()=>updateChat());
   document.addEventListener('mnemosyne:injected',()=>updateChat());
   document.addEventListener('mnemosyne:updated',event=>notifyMemoryUpdated(event.detail?.message,mn.settings().successNotifications));
   renderProfiles();switchTab('archive');updateChat();

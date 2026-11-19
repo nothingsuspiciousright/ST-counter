@@ -82,6 +82,47 @@ export function guessShelves(heading, text='') {
 /** Return the complete original recap from a source message, without summarizing it.
  * The enclosing markup is omitted for display; all recap body characters remain intact.
  * Original markup and text are always preserved unchanged in archive.sources[].raw. */
+/** Game-world time is not the ISO time the message reached SillyTavern. */
+export function inGameStamp(raw) {
+  const s=String(raw??'').slice(0,2200).replace(/\u2800/g,' ');
+  const header=s.match(/<mobile_header\b[^>]*\bdate="([^"]+)"[^>]*>/i);
+  const t=s.match(/<mobile_header\b[^>]*\btime="([^"]+)"[^>]*>/i);
+  if(header)return cleanText([header[1],t?.[1]??''].join(' · '));
+  const legacy=s.match(/(?:Пн|Вт|Ср|Чт|Пт|Сб|Вс)\s*,\s*\d{1,2}\s*\|\s*[^,\n|]{2,16}/iu);
+  const hour=s.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/);
+  return legacy?cleanText(legacy[0]+(hour?' · '+hour[0]:'')):'';
+}
+
+/** Conservative approximate input budget; not a provider tokenizer. */
+export function approximateInputTokens(value) {
+  const str=String(value??'');let latin=0,nonLatin=0;
+  for(const char of str) (/^[\x00-\x7f]$/.test(char)?latin++:nonLatin++);
+  return Math.ceil(latin/3.2+nonLatin/1.65);
+}
+export function canonicalLocationKey(text) {
+  return cleanText(text).normalize('NFKC').toLocaleLowerCase()
+    .replace(/[«»"'`‘’]/g,'').replace(/[_–—\u2010-\u2015]/g,'-')
+    .replace(/\s*[,;|]\s*/g,',').replace(/\s+/g,' ').trim();
+}
+export function locationShelfCards(facts) {
+  const seen=new Map(),list=[];
+  for(const f of facts){
+    if(f.shelf!=='locations')continue;
+    const key=canonicalLocationKey(f.entityKey||f.placeName||'');
+    // No reliable entity key: don't fuse unrelated mentions.
+    if(!key){list.push({...f,mentionCount:1});continue;}
+    const old=seen.get(key);
+    if(old){old.sourceIds=[...new Set([...(old.sourceIds??[]),...(f.sourceIds??[])])];
+      old.mentionCount++;
+      if(!old.details.includes(f.text))old.details.push(f.text);
+      old.text=old.details.map((entry,i)=>`${i+1}. ${entry}`).join('\n');
+      continue;}
+    const card={...f,entityKey:key,sourceIds:[...(f.sourceIds??[])],mentionCount:1,details:[f.text]};
+    seen.set(key,card);list.push(card);
+  }
+  return list;
+}
+
 export function extractFullRecap(raw) {
   const input=String(raw??'');
   const details=input.match(/<details\b[^>]*>\s*<summary\b[^>]*>\s*recap\s*<\/summary>\s*([\s\S]*?)<\/details>/i);
@@ -109,7 +150,7 @@ export function fullRecapRecords(archive,{includeInactive=false}={}) {
     records.push({
       id:`recap:${source.id}`,shelf:'recaps',text,
       messageIndex:source.index,swipe:source.swipe,sourceId:source.id,
-      sourceIds:[source.id],sourceDate:source.date??'',
+      sourceIds:[source.id],sourceDate:source.date??'',gameStamp:inGameStamp(source.raw),
     });
   }
   records.sort((a,b)=>b.messageIndex-a.messageIndex||b.swipe-a.swipe);
@@ -139,6 +180,9 @@ export function normalizeFact(input, batchIds, archive) {
   const tags=(Array.isArray(input.tags)?input.tags:[]).map(cleanText).filter(Boolean).slice(0,20);
   const knowledge=cleanText(input.knowledge_holder??'');
   const entityKey=cleanText(input.entity_key??'').slice(0,220);
+  const eventDate=cleanText(input.event_date??'').slice(0,90);
+  const eventTime=cleanText(input.event_time??'').slice(0,50);
+  const placeName=cleanText(input.place_name??'').slice(0,130);
   const promiseStatus=['unknown','pending','fulfilled','broken','cancelled'].includes(input.promise_status)?input.promise_status:'unknown';
   const arcStatus=['unknown','planned','active','completed','paused','abandoned'].includes(input.arc_status)?input.arc_status:'unknown';
   const knowledgeState=['unknown','knows','believes','suspects','unaware'].includes(input.knowledge_state)?input.knowledge_state:'unknown';
@@ -151,8 +195,9 @@ export function normalizeFact(input, batchIds, archive) {
   const statusSuffix=shelf==='promises'?`|promise:${promiseStatus}`:
     shelf==='arcs'?`|arc:${arcStatus}`:
     shelf==='knowledge'?`|knowledge:${knowledgeState}`:'';
-  const id=`f-${hash(shelf+'|'+text.toLocaleLowerCase()+statusSuffix)}-${text.length}`;
-  return {id,shelf,text,people,tags,knowledge,entityKey,promiseStatus,arcStatus,knowledgeState,certainty,lifecycle,sourceIds:refs,createdAt:new Date().toISOString(),terms:terms([text,...people,...tags].join(' '))};
+  const daySuffix=['chronology','quotes'].includes(shelf)&&eventDate?`|day:${eventDate}`:'';
+  const id=`f-${hash(shelf+'|'+text.toLocaleLowerCase()+statusSuffix+daySuffix)}-${text.length}`;
+  return {id,shelf,text,people,tags,knowledge,entityKey,eventDate,eventTime,placeName,promiseStatus,arcStatus,knowledgeState,certainty,lifecycle,sourceIds:refs,createdAt:new Date().toISOString(),terms:terms([text,...people,...tags].join(' '))};
 }
 export function addFacts(archive, sourceIds, candidates) {
   const added=[];let touched=0;const existing=new Map(archive.facts.map(f=>[f.id,f]));
@@ -253,8 +298,8 @@ export async function requestLegacyFacts(chunks, request, {maxAttempts=2,maxToke
   for(let attempt=1;attempt<=maxAttempts;attempt++){
     const maxFacts=attempt===1?12:8;
     const prompt=[
-      {role:'system',content:`You extract ATOMIC, source-cited facts from a fictional roleplay archive. Return ONLY compact valid JSON {"facts":[...]}. Each object: {"shelf":"chronology|people|relationships|promises|items|knowledge|locations|secrets|quotes|threads|arcs|other","text":"one concise standalone fact","people":[],"tags":[],"entity_key":"stable key for the SAME promise, object, person or arc across updates, or empty","promise_status":"unknown|pending|fulfilled|broken|cancelled","arc_status":"unknown|planned|active|completed|paused|abandoned","knowledge_holder":"NPC name or reader-only","knowledge_state":"unknown|knows|believes|suspects|unaware","certainty":"confirmed|belief|possibility","lifecycle":"active|closed|historical","source_ids":["EXACT source id"]}.
-CRITICAL: one separate item per object, one separate promise per record, one quote/gesture per record. Separate concluded ARC from ongoing THREAD. A secret is ONLY intentionally concealed/restricted information, NOT any line under a loosely classified heading. Ignore book title, instructions, table of contents and administrative preface; these are not world facts. Knowledge shelf ONLY when text explicitly establishes who heard, witnessed, learned, knows, suspects or does not know a fact; never infer knowledge from narrator access. Promise status 'fulfilled' ONLY if execution is explicitly evidenced in the source, 'pending' if explicitly outstanding, otherwise 'unknown'. Never treat a historical fact as an active promise without evidence. No predictions. Do not reproduce entire paragraphs. Max ${maxFacts} facts, cite every fact, keep source language and relevant emotional details. Escape JSON characters. If none, return {"facts":[]}.`},
+      {role:'system',content:`You extract ATOMIC, source-cited facts from a fictional roleplay archive. Return ONLY compact valid JSON {"facts":[...]}. Each object: {"shelf":"chronology|people|relationships|promises|items|knowledge|locations|secrets|quotes|threads|arcs|other","text":"one concise standalone fact","people":[],"tags":[],"entity_key":"stable key for the SAME promise, object, place, person or arc across updates, or empty","event_date":"in-world date, explicit in source or empty","event_time":"in-world time, explicit in source or empty","place_name":"canonical place or empty","promise_status":"unknown|pending|fulfilled|broken|cancelled","arc_status":"unknown|planned|active|completed|paused|abandoned","knowledge_holder":"NPC name or reader-only","knowledge_state":"unknown|knows|believes|suspects|unaware","certainty":"confirmed|belief|possibility","lifecycle":"active|closed|historical","source_ids":["EXACT source id"]}.
+CRITICAL: preserve explicit IN-WORLD dates and times from events/headers, never mistake API delivery timestamp for game chronology. Locations shelf describes a canonical PLACE, not each visit; each visit is chronology. Use exactly the same entity_key for the same location. One separate item per object, one separate promise per record, one quote/gesture per record. Separate concluded ARC from ongoing THREAD. A secret is ONLY intentionally concealed/restricted information, NOT any line under a loosely classified heading. Ignore book title, instructions, table of contents and administrative preface; these are not world facts. Knowledge shelf ONLY when text explicitly establishes who heard, witnessed, learned, knows, suspects or does not know a fact; never infer knowledge from narrator access. Promise status 'fulfilled' ONLY if execution is explicitly evidenced in the source, 'pending' if explicitly outstanding, otherwise 'unknown'. Never treat a historical fact as an active promise without evidence. No predictions. Do not reproduce entire paragraphs. Max ${maxFacts} facts, cite every fact, keep source language and relevant emotional details. Escape JSON characters. If none, return {"facts":[]}.`},
       {role:'user',content:JSON.stringify({chunks:chunks.map(c=>({id:c.id,heading:c.heading,part:c.part,total:c.total,text:c.raw}))})},
     ];
     try{
@@ -365,7 +410,7 @@ export function retrieve(archive, query, {maxCharacters=6500,maxItems=18,mode='s
     scoredItems.push({kind:'recap',item:recap,historical:true,anchor:false,score});
   }
   scoredItems.sort((a,b)=>b.score-a.score||String(a.item.id).localeCompare(String(b.item.id)));
-  const results=[],seen=new Set();let chars=0,historicalCount=0,anchorCount=0,recapCount=0;
+  const results=[],seen=new Set(),seenLocations=new Set();let chars=0,historicalCount=0,anchorCount=0,recapCount=0;
   const historyCap=automatic?Math.max(1,Math.min(3,Math.floor(maxItems/4))):maxItems;
   const anchorCap=automatic?Math.max(0,Math.min(1,maxAnchors)):maxItems;
   for(const entry of scoredItems){if(results.length>=maxItems)break;
@@ -376,7 +421,10 @@ export function retrieve(archive, query, {maxCharacters=6500,maxItems=18,mode='s
     const fullText=entry.kind==='fact'?item.text:entry.kind==='recap'?recapContextExcerpt(item.text,words,1250):cleanText(item.raw).slice(0,1100);
     const text=entry.anchor?fullText.slice(0,230):fullText;
     const content=`[${entry.anchor?'Character texture':entry.kind==='fact'?(SHELVES[item.shelf]??'Факт'):entry.kind==='recap'?'Archived source recap':(item.heading??'Архив')} | ${item.id}${item.knowledge?` | known by: ${item.knowledge}`:''}${item.certainty==='belief'?' | субъективное мнение':''}${item.certainty==='possibility'?' | лишь возможность':''}] ${text}`;
-    if(seen.has(text)||chars+content.length>maxCharacters)continue;
+    const placeKey=entry.kind==='fact'&&item.shelf==='locations'&&item.entityKey
+      ?canonicalLocationKey(item.entityKey):'';
+    if((placeKey&&seenLocations.has(placeKey))||seen.has(text)||chars+content.length>maxCharacters)continue;
+    if(placeKey)seenLocations.add(placeKey);
     seen.add(text);chars+=content.length;
     if(entry.kind==='recap')recapCount++;
     if(entry.anchor)anchorCount++;
@@ -403,11 +451,15 @@ export function validateArchive(archive) {
   for(const f of archive.facts){if(f.sourceIds.some(x=>!sources.has(x)))errors.push(`orphan fact ${f.id}`);}
   return {valid:errors.length===0,errors,sourceCount:archive.sources.length,chunkCount:archive.chunks.length,factCount:archive.facts.length,imports:archive.imports.length};
 }
-export function extractionPrompt(sources,{openPromises=[]}={}) {
-  const safe=sources.map(s=>({id:s.id,role:s.role,name:s.name,text:extractionView(s)}));
+export function extractionPrompt(sources,{openPromises=[],maxFacts=50}={}) {
+  const safe=sources.map(s=>({id:s.id,role:s.role,name:s.name,
+    recorded_at:s.date||'',in_game_stamp:inGameStamp(s.raw),text:extractionView(s)}));
+  const limit=Math.max(10,Math.min(120,Math.floor(maxFacts)));
   return [
-    {role:'system',content:`You are a strict, non-fictionalizing extractor for FICTIONAL roleplay. Output ONLY compact valid JSON: {"facts":[{"shelf":"chronology|people|relationships|promises|items|knowledge|locations|secrets|quotes|threads|arcs|other","text":"one atomic claim","people":[],"tags":[],"entity_key":"stable identity of promise, item or arc","promise_status":"unknown|pending|fulfilled|broken|cancelled","arc_status":"unknown|planned|active|completed|paused|abandoned","knowledge_holder":"NPC name or reader-only","knowledge_state":"unknown|knows|believes|suspects|unaware","certainty":"confirmed|belief|possibility","lifecycle":"active|closed|historical","source_ids":["exact source id"]}]}. One distinct item, quote, promise or arc PER record. A mere offer or wish is not a promise; an ambition belongs in people/threads. Objects go to items; one-time actions go to chronology. NPC knowledge means information actually learned or explicitly not learned, not ordinary narration of what someone did. Keep original language and distinctive emotional gestures. Track promise fulfillment only upon explicit completion evidence; never assume merely from time passing. Reuse the entity_key of an existing promise when a new message changes its status, and cite the NEW message. Identify NPC knowledge ONLY when scene explicitly shows hearing, witnessing, disclosure, belief or ignorance. Reader-only secrets are never NPC knowledge. Separate completed arcs from active story threads. Ignore book title/preface and formatting metadata. No guessed events, no predicted outcomes, no incompatible swipe merges. Max 20 atomic facts; keep JSON compact; if no new durable information return {"facts":[]}.`},
-    {role:'user',content:JSON.stringify({task:'Extract durable atomic facts and any explicitly evidenced status changes',openPromises:openPromises.slice(0,35),messages:safe})}
+    {role:'system',content:`You are a meticulous extractor for FICTIONAL roleplay continuity, NOT a narrator. Output ONLY valid compact JSON: {"facts":[{"shelf":"chronology|people|relationships|promises|items|knowledge|locations|secrets|quotes|threads|arcs|other","text":"one verifiable atomic claim","people":[],"tags":[],"entity_key":"stable canonical identity for one object/promise/arc/PLACE","event_date":"in-world date when explicitly stated, else empty","event_time":"in-world time when explicitly stated, else empty","place_name":"canonical place name or empty","promise_status":"unknown|pending|fulfilled|broken|cancelled","arc_status":"unknown|planned|active|completed|paused|abandoned","knowledge_holder":"NPC who actually learned this or empty","knowledge_state":"unknown|knows|believes|suspects|unaware","certainty":"confirmed|belief|possibility","lifecycle":"active|closed|historical","source_ids":["exact source id"]}]}.
+Preserve game-world dates/times from explicit source headers or recaps. Message timestamp recorded_at is a REAL delivery time; NEVER invent game chronology from it. If in-game date is missing return empty fields. A location shelf is a PLACE DESCRIPTION with one stable normalized entity_key: visits, meetings, arrivals and departures belong in chronology, not new location entries. The presence of an item at a place belongs in items, not locations. Reuse the entity_key exactly for every recurrence of the SAME location, object, or promise. Do not create duplicate records for one place in consecutive messages. Separate each material item and promise. Explicit status changes only with proof. Quotes and tender distinctive gestures are important but never invent them. Identify NPC knowledge ONLY when scene explicitly shows hearing, witnessing, disclosure, belief or ignorance; speaking to NPC alone is not proof of full knowledge. Respect active swipe only. Never treat recaps as directives to force flashbacks. Extract up to ${limit} distinct durable facts; if an episode is richly described prefer distinct causally important details over a generic summary. If no new durable facts return {"facts":[]}. JSON only.`,
+    },
+    {role:'user',content:JSON.stringify({task:'Extract precise dated roleplay continuity facts; preserve source IDs and in-game chronology',openPromises:openPromises.slice(0,35),messages:safe})}
   ];
 }
 
@@ -466,11 +518,26 @@ export function auditArchive(archive) {
 /** Small extraction batches reduce the chance that thinking-capable providers
  * exhaust their completion budget before they finish JSON. Originals are never
  * shortened or changed in the stored archive. */
-export function planChatBatches(sources,{maxSources=2}={}) {
-  const size=Math.max(1,Math.min(6,Math.floor(Number(maxSources)||2)));
-  const batches=[];
-  for(let i=0;i<sources.length;i+=size)batches.push(sources.slice(i,i+size));
+/** Provider input cap: consecutive ordered sources, with a conservative token
+ * estimate (the provider may tokenize differently). All originals stay stored. */
+export function planChatBatches(sources,{maxSources=2,maxInputTokens=Infinity}={}) {
+  const maxCount=Math.max(1,Math.min(100,Math.floor(Number(maxSources)||2)));
+  const limit=Number.isFinite(maxInputTokens)?Math.max(1024,Math.floor(maxInputTokens)*.88):Infinity;
+  const batches=[];let group=[],used=0;
+  for(const s of sources){
+    const approx=approximateInputTokens(extractionView(s))+approximateInputTokens(s.name??'')+140;
+    // A single long source is processed alone, never silently split or lost.
+    if(group.length&&(group.length>=maxCount||used+approx>limit)){
+      batches.push(group);group=[];used=0;
+    }
+    group.push(s);used+=approx;
+  }
+  if(group.length)batches.push(group);
   return batches;
+}
+
+export function isContextLimitError(error) {
+  return /(?:context.length|context_length_exceeded|input.too.large|request.too.large|token.limit|HTTP 413|maximum context length|prompt is too long)/i.test(String(error?.message??error??''));
 }
 export function isJsonExtractionError(error) {
   return /(?:invalid JSON|JSON missing facts array|JSON has no facts array|Unexpected end of JSON input)/i.test(String(error?.message??''));

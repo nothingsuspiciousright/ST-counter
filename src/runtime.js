@@ -1,12 +1,38 @@
-import {SHELVES,newArchive,snapshotChat,mergeSources,syncActiveSources,sourceId,importMemoryBook,parseJsonReply,addFacts,extractionPrompt,retrieve,renderContext,validateArchive,terms,hash,pendingExtraction,extractionView,planLegacyJobs,requestLegacyFacts,segmentLegacyChunk,currentStateRecords,activeFact,fullRecapRecords,isContentPolicyRejection,auditArchive,planChatBatches,isJsonExtractionError,retryOutputTokens} from './core.js';
+import {SHELVES,newArchive,snapshotChat,mergeSources,syncActiveSources,sourceId,importMemoryBook,parseJsonReply,addFacts,extractionPrompt,retrieve,renderContext,validateArchive,terms,hash,pendingExtraction,extractionView,planLegacyJobs,requestLegacyFacts,segmentLegacyChunk,currentStateRecords,activeFact,fullRecapRecords,isContentPolicyRejection,auditArchive,planChatBatches,isJsonExtractionError,retryOutputTokens,approximateInputTokens,locationShelfCards,isContextLimitError} from './core.js';
 import {localGet,localPut,localDelete,serverGet,serverPut,serverDelete,downloadJson} from './storage.js';
 import {wipeChatMemory} from './reset.js';
 import {ConnectionManagerRequestService} from '../../../shared.js';
 import {readSnapshot,diffReadSnapshot} from './read-markers.js';
 const KEY='sola_mnemosyne_v1';
-const BASE_SETTINGS={enabled:false,profileId:'',batchEvery:40,autoUpdate:true,maxTokens:8192,contextTokens:2400,recentLookback:2,autoBackup:true,archiveOnReceive:true,successNotifications:true};
+const BASE_SETTINGS={enabled:false,profileId:'',batchEvery:40,autoUpdate:true,maxTokens:8192,contextTokens:2400,recentLookback:2,autoBackup:true,archiveOnReceive:true,successNotifications:true,inputBudgetTokens:16000};
 export const log=[];
 let active=null, activeId='',queue=Promise.resolve(),lastInjection='',lastSyncCount=0,autoRunning=false,resetPending=false;
+let indexing={running:false,stopRequested:false,mode:'',startedAt:null};
+export function indexingState(){return {...indexing,lastError:active?.lastIndexError??null,progress:active?.indexProgress??null};}
+/** Cooperative stop: current paid API request may finish, no next request starts. */
+export function stopIndexing(){
+  if(!indexing.running)return false;
+  indexing.stopRequested=true;
+  sendStatus('warn','Остановка запрошена: завершаю текущий запрос, следующий пакет не начнётся.');
+  return true;
+}
+function beginIndex(mode){
+  if(indexing.running)throw Error('Индексация уже запущена. Нажми «Остановить» либо дождись завершения.');
+  indexing={running:true,stopRequested:false,mode,startedAt:new Date().toISOString()};
+  document.dispatchEvent(new CustomEvent('mnemosyne:indexing-changed',{detail:indexingState()}));
+}
+
+function endIndex(){indexing={...indexing,running:false,stopRequested:false};
+  document.dispatchEvent(new CustomEvent('mnemosyne:indexing-changed',{detail:indexingState()}));
+}
+export async function resumeIndexing(){
+  if(indexing.running)throw Error('Индексация уже запущена.');
+  if(active?.awaitingManualScan)throw Error('Сначала нажми «Обновить архив из чата».');
+  if(active?.indexProgress?.mode==='legacy-rebuild')return processLegacy({rebuild:true});
+  if(active?.indexProgress?.mode==='legacy')return processLegacy();
+  return processBacklog({force:true});
+}
+
 // Short scene-local character texture should not be sent on every generation.
 const generationTicks=new Map(),lastTextureTicks=new Map();
 function ctx(){return SillyTavern.getContext();}
@@ -42,6 +68,7 @@ export function currentIdentity(){return activeId;}
 export async function resetCurrentChat(){
   if(!active||!activeId)throw Error('Открой сохранённый чат для сброса памяти.');
   if(resetPending)throw Error('Сброс уже выполняется.');
+  if(indexing.running)throw Error('Сначала останови индексацию и дождись завершения текущего запроса.');
   const expected=active,chatId=activeId;
   resetPending=true;
   // Do not let the previously injected memory survive the reset.
@@ -70,7 +97,7 @@ export async function resetCurrentChat(){
   });}finally{resetPending=false;}
 }
 
-export function getStats(){return active?{...validateArchive(active),awaitingManualScan:!!active.awaitingManualScan,blockedBatches:(active.batches??[]).filter(x=>x.status==='blocked').length,chatId:active.chatId,lastSync:active.lastSync,pending:pendingExtraction(active).assistantCount,batchEvery:settings().batchEvery,recentLog:log.slice(0,8)}:null;}
+export function getStats(){return active?{...validateArchive(active),awaitingManualScan:!!active.awaitingManualScan,blockedBatches:(active.batches??[]).filter(x=>x.status==='blocked').length,chatId:active.chatId,lastSync:active.lastSync,pending:pendingExtraction(active).assistantCount,batchEvery:settings().batchEvery,indexing:indexingState(),recentLog:log.slice(0,8)}:null;}
 
 /** Bind a new conversation to an independent archive (or fork a copied metadata pointer). */
 export async function openChat(){return enqueue(async()=>{
@@ -139,95 +166,125 @@ async function callArchivist(messages, maxTokens=1800){
 }
 /** Batch extraction; broken response never marks a batch as complete. */
 export async function processBacklog({force=false}={}){
-  if(active?.awaitingManualScan)throw Error('После полного сброса сначала нажми «Обновить архив из чата».');
+  if(active?.awaitingManualScan)throw Error('После сброса сначала нажми «Обновить архив из чата».');
   if(!active)throw Error('No chat is open');if(!settings().profileId)throw Error('Select an archivist profile');
-  return enqueue(async()=>{
+  beginIndex('chat');
+  try{return await enqueue(async()=>{
+    const target=active,identity=activeId;
     await captureCurrentChat({quiet:true});
-    const {sources:candidates,assistantCount}=pendingExtraction(active,{force});
+    const {sources:candidates,assistantCount}=pendingExtraction(target,{force});
     if(!force&&assistantCount<settings().batchEvery)return {waiting:true,assistantCount};
-    let count=0,created=0,blocked=0;
-    const jobs=planChatBatches(candidates).map(sources=>({sources,tokenLimit:settings().maxTokens,retried:false}));
+    const totalSources=candidates.length;
+    const inputCap=Math.max(4000,Math.min(50000,Number(settings().inputBudgetTokens)||16000));
+    let count=0,created=0,blocked=0,completedSources=0;
+    // The selected cap is an upper bound, not an exact token guarantee.
+    const jobs=planChatBatches(candidates,{maxSources:100,maxInputTokens:inputCap})
+      .map(sources=>({sources,tokenLimit:settings().maxTokens,retried:false}));
+    target.indexProgress={mode:'chat',status:'running',totalSources,completedSources:0,doneBatches:0,startedAt:new Date().toISOString()};
+    target.lastIndexError=null;await persist();
     for(let i=0;i<jobs.length;i++){
+      if(indexing.stopRequested){target.indexProgress.status='stopped';await persist();break;}
       const job=jobs[i],batchSources=job.sources;
-      const origChatId=activeId;
       const id=`batch-${hash(batchSources.map(x=>x.id).join('|'))}`;
       try{
-        const openPromises=currentStateRecords(active.facts,'promises')
+        const openPromises=currentStateRecords(target.facts,'promises')
           .filter(f=>['unknown','pending'].includes(f.promiseStatus??'unknown')&&f.entityKey)
           .slice(0,20).map(f=>({entity_key:f.entityKey,text:f.text,status:f.promiseStatus}));
-        const reply=await callArchivist(extractionPrompt(batchSources,{openPromises}),job.tokenLimit);
-        if(origChatId!==chatIdentity()||origChatId!==activeId)throw Error('Chat changed during extraction; aborted to prevent contamination');
+        const dynamicFacts=Math.max(25,Math.min(100,Math.floor(settings().maxTokens/115)));
+        const reply=await callArchivist(extractionPrompt(batchSources,{openPromises,maxFacts:dynamicFacts}),job.tokenLimit);
+        if(identity!==chatIdentity()||identity!==activeId||target!==active)
+          throw Error('Чат изменился во время индексации; чужие факты не сохранены.');
         if(!Array.isArray(reply.facts))throw Error('Archivist JSON missing facts array');
-        const added=addFacts(active,batchSources.map(x=>x.id),reply.facts);
-        active.batches.push({id,sourceIds:batchSources.map(x=>x.id),status:'done',facts:added.length,at:new Date().toISOString()});
-        active.revision++;count++;created+=added.length;
-        await persist();sendStatus('info',`Batch ${count}: ${added.length} facts / ${batchSources.length} messages`);
+        // If the model fills the entire output allowance it may have omitted
+        // details. Split, rather than falsely mark the whole giant batch complete.
+        if(reply.facts.length>=dynamicFacts && batchSources.length>1){
+          const half=Math.ceil(batchSources.length/2);
+          jobs.splice(i,1,{...job,sources:batchSources.slice(0,half)},
+            {...job,sources:batchSources.slice(half)});
+          i--;sendStatus('warn','Лимит фактов исчерпан: делю большой пакет для сохранения деталей.');continue;
+        }
+        const added=addFacts(target,batchSources.map(x=>x.id),reply.facts);
+        target.batches.push({id,sourceIds:batchSources.map(x=>x.id),status:'done',facts:added.length,at:new Date().toISOString()});
+        target.revision++;count++;created+=added.length;completedSources+=batchSources.length;
+        target.indexProgress={...target.indexProgress,status:indexing.stopRequested?'stopping':'running',completedSources,doneBatches:count};
+        target.lastIndexError=null;
+        await persist();sendStatus('info',`Индексация: ${completedSources}/${totalSources} исходников · +${added.length} фактов`);
       }catch(err){
-        if(isContentPolicyRejection(err)) {
-          // Provider policy refusals are never retried by splitting or rewriting.
-          active.batches.push({id,sourceIds:batchSources.map(x=>x.id),status:'blocked',facts:0,
+        if(identity!==chatIdentity()||target!==active)throw err;
+        if(isContentPolicyRejection(err)){
+          target.batches.push({id,sourceIds:batchSources.map(x=>x.id),status:'blocked',facts:0,
             reason:'provider_content_policy',at:new Date().toISOString()});
-          active.diagnostics.push({at:new Date().toISOString(),kind:'content_blocked',id,
-            message:'Provider refused this source batch. Originals preserved; facts NOT extracted.'});
-          active.revision++;blocked++;await persist();
-          sendStatus('warn',`Provider blocked a batch of ${batchSources.length} messages; originals remain in the archive. Processing other batches.`);
+          target.diagnostics.push({at:new Date().toISOString(),kind:'content_blocked',id,
+            message:'Provider policy refusal. Originals preserved; facts NOT extracted.'});
+          target.revision++;blocked++;completedSources+=batchSources.length;
+          target.indexProgress={...target.indexProgress,completedSources,status:'running',blocked};
+          await persist();sendStatus('warn',`Провайдер отклонил пакет ${id}: сохранён оригинал, разметка пропущена.`);
           continue;
         }
-        // Fail closed on malformed JSON; retry using additional completion
-        // tokens once, then split the job and commit each successful half.
-        // This avoids re-paying for previously committed source IDs.
-        if(isJsonExtractionError(err)) {
+        if(isContextLimitError(err)&&batchSources.length>1){
+          const half=Math.ceil(batchSources.length/2);
+          jobs.splice(i,1,{...job,sources:batchSources.slice(0,half)},
+            {...job,sources:batchSources.slice(half)});
+          i--;sendStatus('warn','Провайдер не принял большой вход: делю пакет, сохраняя исходники.');continue;
+        }
+        if(isJsonExtractionError(err)){
           if(!job.retried && job.tokenLimit<32768){
             jobs.splice(i,1,{...job,tokenLimit:retryOutputTokens(job.tokenLimit),retried:true});
-            i--;sendStatus('warn','Incomplete archivist JSON: retrying with a larger output allowance.');
-            continue;
+            i--;sendStatus('warn','Некорректный JSON: повторяю с большим лимитом вывода.');continue;
           }
           if(batchSources.length>1){
             const half=Math.ceil(batchSources.length/2);
-            jobs.splice(i,1,
-              {sources:batchSources.slice(0,half),tokenLimit:settings().maxTokens,retried:false},
+            jobs.splice(i,1,{sources:batchSources.slice(0,half),tokenLimit:settings().maxTokens,retried:false},
               {sources:batchSources.slice(half),tokenLimit:settings().maxTokens,retried:false});
-            i--;sendStatus('warn','Incomplete archivist JSON: dividing the source batch; original text remains untouched.');
-            continue;
+            i--;sendStatus('warn','Некорректный JSON: делю пакет; уже сохранённые факты не трогаю.');continue;
           }
         }
-        active.diagnostics.push({at:new Date().toISOString(),kind:'extract_error',id,message:err.message});
-        await persist();sendStatus('error',`Batch extraction stopped: ${err.message}`);throw err;
+        target.lastIndexError={id,firstMessageIndex:batchSources[0]?.index??null,
+          sourceIds:batchSources.map(x=>x.id),message:String(err?.message||err),at:new Date().toISOString()};
+        target.indexProgress={...target.indexProgress,status:'error',completedSources,failedBatchId:id};
+        target.diagnostics.push({at:new Date().toISOString(),kind:'extract_error',id,message:String(err?.message||err)});
+        await persist();sendStatus('error',`Остановка на пакете ${id} (сообщение #${(batchSources[0]?.index??0)+1}). После исправления нажми «Продолжить»: ${err.message}`);throw err;
       }
     }
+    if(!indexing.stopRequested)target.indexProgress={...target.indexProgress,status:'done'};
     if(settings().autoBackup && (count||blocked)){
-      try {await backupNow();} catch (err) {sendStatus('warn',`Факты сохранены, но серверная копия не создана: ${err.message}`);}
+      try{await backupNow();}catch(err){sendStatus('warn',`Факты сохранены локально, но серверная копия не создана: ${err.message}`);}
     }
-    if(count||blocked){
-      memoryUpdated('extract',`${count} пакетов обработано, +${created} фактов; ${blocked} отклонено провайдером`);
-    }
-    return {batches:count,facts:created,blocked};
-  });
+    await persist();
+    if(count||blocked)memoryUpdated('extract',`${count} пакетов, +${created} фактов; ${blocked} отклонено`);
+    return {batches:count,facts:created,blocked,stopped:indexing.stopRequested,completedSources,totalSources};
+  });}finally{endIndex();}
 }
+
 /** Explicit opt-in for generic API errors that conceal their real cause.
  * A skipped batch remains part of the raw archive and cannot be mistaken for processed facts. */
 export async function skipFailedBatch(){
   if(!active)throw Error('No chat is open');
+  if(indexing.running)throw Error('Останови текущую обработку перед пропуском.');
   return enqueue(async()=>{
     await captureCurrentChat({quiet:true});
-    const six=planChatBatches(pendingExtraction(active,{force:true}).sources)[0]??[];
-    if(!six.length)throw Error('No unprocessed source batch');
-    const id=`batch-${hash(six.map(x=>x.id).join('|'))}`;
-    if(!(active.diagnostics??[]).some(x=>x.id===id&&x.kind==='extract_error'))
-      throw Error('Only a previously failed batch may be skipped manually');
-    const record={id,sourceIds:six.map(x=>x.id),status:'blocked',facts:0,
+    const previous=active.lastIndexError;
+    if(!previous?.id||!Array.isArray(previous.sourceIds)||!previous.sourceIds.length)
+      throw Error('Нет сохранённой ошибки пакета. Нажми «Продолжить» для обычного повтора.');
+    const remaining=new Set(pendingExtraction(active,{force:true}).sources.map(x=>x.id));
+    if(!previous.sourceIds.every(id=>remaining.has(id)))
+      throw Error('Ошибка относится к уже обработанным или неактивным сообщениям; пропуск запрещён.');
+    if(!(active.diagnostics??[]).some(x=>x.id===previous.id&&x.kind==='extract_error'))
+      throw Error('Не найдено подтверждение предыдущей ошибки.');
+    const record={id:previous.id,sourceIds:[...previous.sourceIds],status:'blocked',facts:0,
       reason:'manually_skipped_after_error',at:new Date().toISOString()};
     active.batches.push(record);
-    active.diagnostics.push({at:record.at,kind:'manual_skip',id,
-      message:'Batch skipped by user after an error. Originals preserved; facts NOT extracted.'});
-    active.revision++;await persist();
-    sendStatus('warn',`Skipped ${six.length} messages after the confirmed failure; originals remain archived.`);
-    return {id,messages:six.length};
+    active.diagnostics.push({at:record.at,kind:'manual_skip',id:record.id,
+      message:'Package skipped by user. Original sources retained, NO facts extracted.'});
+    active.lastIndexError=null;active.revision++;await persist();
+    sendStatus('warn',`Пропущен ровно ошибочный пакет ${record.id}; ${record.sourceIds.length} источников в архиве сохранены.`);
+    return {id:record.id,messages:record.sourceIds.length};
   });
 }
+
 /** Automatically process only NEW assistant replies collected since activation. */
 export async function maybeAutoProcess(){
-  if(resetPending||active?.awaitingManualScan||autoRunning||!active||!settings().autoUpdate||!settings().profileId)return {waiting:true};
+  if(resetPending||active?.awaitingManualScan||autoRunning||indexing.running||!active||!settings().autoUpdate||!settings().profileId)return {waiting:true};
   const due=pendingExtraction(active).assistantCount;
   if(due<settings().batchEvery)return {waiting:true,assistantCount:due};
   autoRunning=true;
@@ -242,14 +299,16 @@ async function extractChunk(chunk){
   const jobs=planLegacyJobs(parts,{maxChunks:2,maxCharacters:2300});
   const all=[];
   for(const block of jobs){
+    if(indexing.stopRequested)break;
     const ask=async(group)=>requestLegacyFacts(group,(prompt,tokenLimit)=>callArchivist(prompt,tokenLimit),{
       maxAttempts:2,maxTokens:settings().maxTokens,
       onRetry:()=>sendStatus('warn','Архивариус вернул некорректный JSON, повторяю маленький фрагмент.')});
     try{all.push(...await ask(block));}
     catch(err){
+      if(indexing.stopRequested)break;
       if(block.length===1)throw err;
       sendStatus('warn','Разбиваю проблемный фрагмент на отдельные части.');
-      for(const one of block)all.push(...await ask([one]));
+      for(const one of block){if(indexing.stopRequested)break;all.push(...await ask([one]));}
     }
   }
   return all;
@@ -257,7 +316,8 @@ async function extractChunk(chunk){
 export async function processLegacy({rebuild=false}={}){
   if(!active)throw Error('No chat is open');
   if(!settings().profileId)throw Error('Select an archivist Connection Profile');
-  return enqueue(async()=>{
+  beginIndex(rebuild?'legacy-rebuild':'legacy');
+  try{return await enqueue(async()=>{
     const initial=active,identity=activeId;
     const completed=new Set((initial.legacyBatches??[]).filter(b=>b.status==='done').flatMap(b=>b.chunkIds));
     const pending=rebuild?initial.chunks:initial.chunks.filter(c=>!completed.has(c.id));
@@ -269,7 +329,9 @@ export async function processLegacy({rebuild=false}={}){
       initial.legacyRebuild??={fingerprint,doneIds:[],stagedFacts:[],startedAt:new Date().toISOString()};
       await persist();
     }
+    initial.indexProgress={mode:rebuild?'legacy-rebuild':'legacy',status:'running',totalSources:pending.length,completedSources:0,startedAt:new Date().toISOString()};
     for(const chunk of pending){
+      if(indexing.stopRequested){initial.indexProgress.status='stopped';await persist();break;}
       if(identity!==chatIdentity()||activeId!==identity||active!==initial)
         throw Error('Chat changed during legacy migration; processing paused without losing archived data');
       if(rebuild&&initial.legacyRebuild.doneIds.includes(chunk.id))continue;
@@ -279,6 +341,7 @@ export async function processLegacy({rebuild=false}={}){
         initial.diagnostics.push({at:new Date().toISOString(),kind:'legacy_error',chunkIds:[chunk.id],message:error.message});
         await persist();sendStatus('error',`Legacy index paused; resume is safe: ${error.message}`);throw error;
       }
+      if(indexing.stopRequested){initial.indexProgress.status='stopped';await persist();break;}
       if(identity!==chatIdentity()||activeId!==identity||active!==initial)
         throw Error('Chat changed during legacy migration; uncommitted result discarded');
       if(rebuild){
@@ -292,10 +355,10 @@ export async function processLegacy({rebuild=false}={}){
         initial.legacyBatches.push({chunkIds:[chunk.id],status:'done',at:new Date().toISOString(),facts:added.length});
         facts+=added.length;
       }
-      initial.revision++;batches++;await persist();
+      initial.revision++;batches++;initial.indexProgress={...initial.indexProgress,completedSources:batches,status:indexing.stopRequested?'stopping':'running'};await persist();
       sendStatus('info',`${rebuild?'Переразметка':'Наследие'}: ${batches} источников обработано, +${facts} фактов`);
     }
-    if(rebuild){
+    if(rebuild&&!indexing.stopRequested){
       // Retain facts originating in live chat; only replace old legacy-only
       // classifications after complete success. A failed run never touches them.
       const chunkIds=new Set(initial.chunks.map(c=>c.id));
@@ -325,9 +388,10 @@ export async function processLegacy({rebuild=false}={}){
       sendStatus('info','Переразметка завершена. Старые классификации заменены, первоисточники и чат сохранены.');
     }
     if(settings().autoBackup&&batches)try{await backupNow();}catch(e){sendStatus('warn',`Факты сохранены локально; серверная копия не создана: ${e.message}`);}
-    if(batches||rebuild)memoryUpdated('legacy',rebuild?`Полочки переразмечены · ${initial.facts.length} структурированных записей`:`Наследие разобрано · +${facts} фактов`);
-    return {batches,facts,total:initial.facts.length,rebuild};
-  });
+    if(!indexing.stopRequested)initial.indexProgress={...initial.indexProgress,status:'done'};await persist();
+    if(batches||(!indexing.stopRequested&&rebuild))memoryUpdated('legacy',rebuild?`Полочки переразмечены · ${initial.facts.length} структурированных записей`:`Наследие разобрано · +${facts} фактов`);
+    return {batches,facts,total:initial.facts.length,rebuild,stopped:indexing.stopRequested};
+  });}finally{endIndex();}
 }
 /** Prefer the newest player action to an older assistant recap.
  * Short continuation commands may require context from the preceding scene. */
@@ -412,6 +476,7 @@ export function shelfRecords(shelf){
   if(shelf==='recaps')return fullRecapRecords(active);
   const activeFacts=active.facts.filter(f=>activeFact(f,active));
   if(['promises','arcs'].includes(shelf))return currentStateRecords(activeFacts,shelf).slice(0,400);
+  if(shelf==='locations')return locationShelfCards(activeFacts.filter(x=>x.shelf==='locations').slice().reverse()).slice(0,400);
   return activeFacts.filter(x=>x.shelf===shelf).slice(-400).reverse();
 }
 export function shelfChanges(shelf){

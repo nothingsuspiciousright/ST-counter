@@ -2,7 +2,7 @@
 
 **Independent, structured, vector-free RP memory for SillyTavern.** A browser-side extension designed for long-running roleplay, with an optional *separate, cheaper* Connection Profile to extract facts from chat messages. It does **not** replace or modify your RP preset, chat text, Summarize, or world books.
 
-> Version 0.3.5 — installable preview. Pure archive logic has automated tests. The SillyTavern integration and your provider's Connection Profile must be verified in your own installation before you disable existing memory. **Keep Summarize enabled until the migration check passes.**
+> Version 0.3.12 — installable preview. Pure archive logic has automated tests. The SillyTavern integration and your provider's Connection Profile must be verified in your own installation before you disable existing memory. **Keep Summarize enabled until the migration check passes.**
 
 ## Key features
 
@@ -158,3 +158,16 @@ To start over: click **Обновить архив из чата** to read all a
 messages (no API calls), then **Обработать новые события** to extract facts using
 the selected archivist model (may consume paid quota). If you want the previous
 Memory Book too, import it again on the **Наследие** tab.
+
+## v0.3.12 — Bigger model input + visible recovery
+
+- Adjustable **archivist input cap** (4K, 8K, 16K, 32K or 50K approximately) is completely separate from the archivist *output* budget and the RP model's *memory injection* budget. Uses a conservative character-based approximation; actual API token count and proxy limits may differ.
+- Inputs group chronologically adjacent active-swipe source messages within the selected input budget. A batch may be substantially smaller than the selected cap. Oversized requests are split on recognized provider context-length errors. A source is never silently deleted or abbreviated in stored archive.
+- Previously fixed 20-fact chat cap replaced by an adjustable per-request fact target based on the *output* token allowance, with splitting when the model hits that cap. **No LLM can guarantee extraction of every detail** from a 50K-token prompt. Complete original messages and recaps are the source of truth.
+- **Остановить индексацию** cooperatively stops after the *currently running* request completes. It does not guarantee cancellation of an already sent HTTP request or a refund. **Продолжить с места остановки / ошибки** retries only still-unprocessed source IDs, using the saved completed-batch checkpoint. Under provider policy refusal, the batch remains marked blocked and isn't retried automatically.
+- The archive records the failing batch ID, message index, and error reason. Diagnostics display the pointer and per-run progress. The manual skip action targets **exactly the previously failed source IDs**; skipped raw originals remain in the archive without fabricated facts.
+- New extraction metadata distinguishes the **in-world event date/time** from the real SillyTavern message timestamp. Unknown event dates remain unknown. Where dates were not extracted, the UI may show the raw *source scene header* as context, **not** assert it was necessarily the event's date. Full recaps also show their available in-world header.
+- The **Locations** shelf displays repeated entries with the same normalized `entity_key` as one expandable place card, keeping all distinct recorded descriptions and source citations. Visits belong in chronology. Unmatched or differently named places are not automatically merged as that can corrupt canon.
+- This release does **not** rewrite previously imported facts or repopulate missing game dates in existing records. Use backup + safe rescan/reindex if you want fresh structured extraction; never publish your RP exports or archives to a public repository.
+
+**Recovery steps:** When an API/JSON failure stops chat indexing, correct the provider issue then click **Продолжить с места остановки / ошибки**. Already committed `done` batches will not be re-billed; the failed batch is still pending. If the provider explicitly rejected a batch under its content policy, the raw source is kept but the status is `blocked` and the batch will not be automatically retried. Keep backups and review Diagnostics before disabling Summarize.

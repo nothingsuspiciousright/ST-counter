@@ -1,6 +1,6 @@
 <section id="mnemosyne-panel" class="mn-theme">
   <details class="mn-root" open>
-    <summary class="mn-top"><span class="mn-symbol">✦</span><span><strong>Sola Mnemosyne</strong><small>Глубокая память · архивариус</small></span><span class="mn-version">v0.3.11</span></summary>
+    <summary class="mn-top"><span class="mn-symbol">✦</span><span><strong>Sola Mnemosyne</strong><small>Глубокая память · архивариус</small></span><span class="mn-version">v0.3.12</span></summary>
     <div class="mn-body">
       <p class="mn-subtle">Независима от Summarize, векторов и лорбуков. Исходная история сохраняется; в контекст передаются выбранные записи.</p>
       <nav class="mn-tabs">
@@ -24,6 +24,12 @@
           <input id="mn-archivist-tokens" type="number" min="1024" max="32768" step="512" value="8192" class="text_pole"/>
         </label>
         <p class="mn-hint">Отдельно от бюджета контекста RP. Для моделей с рассуждениями начни с 8192–12000, если твой API поддерживает такой лимит. Увеличение лимита не гарантирует правильный JSON и может повысить стоимость.</p>
+        <label class="mn-field">Максимальный входной пакет архивариуса (примерно, токены)
+          <select id="mn-input-tokens" class="text_pole">
+            <option value="4000">4K</option><option value="8000">8K</option><option value="16000">16K</option><option value="32000">32K</option><option value="50000">50K</option>
+          </select>
+        </label>
+        <p class="mn-hint">Это верхняя граница по приблизительному подсчёту, не точный лимит провайдера. Для 50K нужен достаточно большой лимит ВЫВОДА: большие пакеты могут потребовать дробления и повторной оплаты, если факты не помещаются.</p>
         <label class="mn-check"><input id="mn-auto-backup" type="checkbox" checked/> <span>Автоматически сохранять копии на сервер SillyTavern</span></label>
         <label class="mn-check"><input id="mn-success-notifications" type="checkbox" checked/> <span>Тихое уведомление об успешном обновлении памяти</span></label>
         <p class="mn-hint">Маленькая серебряная плашка на 3 секунды. Без звука и вибрации; только после сохранения обработанной памяти, не после каждого сообщения.</p>
@@ -32,12 +38,16 @@
         <div class="mn-actions">
           <button id="mn-scan" type="button" class="menu_button">Обновить архив из чата</button>
           <button id="mn-extract" type="button" class="menu_button">Обработать новые события</button>
+          <button id="mn-stop-index" type="button" class="menu_button" disabled>Остановить индексацию</button>
+          <button id="mn-resume-index" type="button" class="menu_button">Продолжить с места остановки / ошибки</button>
       <button type="button" id="mn-skip-failed" class="menu_button" title="Сохраняет исходники, но пропускает разметку одного ошибочного пакета">Пропустить ошибочный пакет (оригинал сохранить)</button>
         </div>
         <div class="mn-actions">
           <button id="mn-sync-now" type="button" class="menu_button">Копия на сервере</button>
           <button id="mn-export" type="button" class="menu_button">Скачать полный архив</button>
         </div>
+        <div id="mn-index-progress" class="mn-index-progress" aria-live="polite">Индексация не запускалась.</div>
+        <p class="mn-hint">Остановка срабатывает после завершения текущего API-запроса: уже подтверждённые пакеты сохраняются. При ошибке нажми «Продолжить» — повторится первый НЕобработанный пакет. Пакеты, отклонённые провайдером, останутся помечены как пропущенные.</p>
         <div id="mn-sync" class="mn-hint"></div>
         <div id="mn-injection" class="mn-hint"></div>
         <label class="mn-field">Поиск (включая исходные сообщения и старые свайпы)

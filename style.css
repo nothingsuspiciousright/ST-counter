@@ -136,3 +136,7 @@
   border-radius:8px;background:rgba(167,190,219,.13);color:var(--mn-ink);
   cursor:pointer;font-size:12px;}
 #mnemosyne-panel .mn-show-more:hover{background:rgba(167,190,219,.23)}
+
+/* Indexing progress and cooperative pause/resume. */
+#mnemosyne-panel .mn-index-progress{margin:8px 0;padding:9px 10px;border:1px solid var(--mn-line);border-radius:9px;background:#9cbbdb0c;font:12px/1.5 inherit;overflow-wrap:anywhere;color:#d9e5f5;}
+#mnemosyne-panel #mn-stop-index:disabled,#mnemosyne-panel #mn-resume-index:disabled{opacity:.45;cursor:default;}
