@@ -1,6 +1,6 @@
 <section id="mnemosyne-panel" class="mn-theme">
   <details class="mn-root" open>
-    <summary class="mn-top"><span class="mn-symbol">✦</span><span><strong>Sola Mnemosyne</strong><small>Глубокая память · архивариус</small></span><span class="mn-version">v0.3.10</span></summary>
+    <summary class="mn-top"><span class="mn-symbol">✦</span><span><strong>Sola Mnemosyne</strong><small>Глубокая память · архивариус</small></span><span class="mn-version">v0.3.11</span></summary>
     <div class="mn-body">
       <p class="mn-subtle">Независима от Summarize, векторов и лорбуков. Исходная история сохраняется; в контекст передаются выбранные записи.</p>
       <nav class="mn-tabs">
@@ -75,6 +75,12 @@
         <h4>Восстановление из полной резервной копии</h4>
         <p class="mn-hint">Внимание: замена архива из JSON требует подтверждения. Перед восстановлением скачай текущую копию.</p>
         <input type="file" id="mn-restore" accept=".json,application/json" />
+        <div class="mn-danger-zone">
+          <h4>Полный сброс памяти этого чата</h4>
+          <p class="mn-hint">Безвозвратно очистить факты, источники, все recap в архиве, старые импорты Memory Book, очередь обработки, ошибки и отметки прочитанного. Чат SillyTavern, чужие чаты и настройки API не затрагиваются. После сброса можно заново считать историю из SillyTavern.</p>
+          <p class="mn-hint"><strong>Сначала нажми «Скачать полный архив»</strong> во вкладке «Память» и убедись, что JSON действительно сохранился на устройство. Локальные копии, уже скачанные тобой, не удаляются.</p>
+          <button type="button" id="mn-reset-current" class="menu_button mn-danger-button">Очистить ВСЮ память текущего чата</button>
+        </div>
         <h4>Журнал</h4><div id="mn-log" class="mn-log"></div>
       </section>
       <footer class="mn-footer">Локальное хранилище IndexedDB + резервные копии в папке пользователя SillyTavern. История других чатов изолирована. Без облака Mnemosyne и без отправки данных третьим лицам кроме выбранного архивариуса.</footer>

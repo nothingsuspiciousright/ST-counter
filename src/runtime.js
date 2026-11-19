@@ -1,11 +1,12 @@
 import {SHELVES,newArchive,snapshotChat,mergeSources,syncActiveSources,sourceId,importMemoryBook,parseJsonReply,addFacts,extractionPrompt,retrieve,renderContext,validateArchive,terms,hash,pendingExtraction,extractionView,planLegacyJobs,requestLegacyFacts,segmentLegacyChunk,currentStateRecords,activeFact,fullRecapRecords,isContentPolicyRejection,auditArchive,planChatBatches,isJsonExtractionError,retryOutputTokens} from './core.js';
-import {localGet,localPut,serverGet,serverPut,downloadJson} from './storage.js';
+import {localGet,localPut,localDelete,serverGet,serverPut,serverDelete,downloadJson} from './storage.js';
+import {wipeChatMemory} from './reset.js';
 import {ConnectionManagerRequestService} from '../../../shared.js';
 import {readSnapshot,diffReadSnapshot} from './read-markers.js';
 const KEY='sola_mnemosyne_v1';
 const BASE_SETTINGS={enabled:false,profileId:'',batchEvery:40,autoUpdate:true,maxTokens:8192,contextTokens:2400,recentLookback:2,autoBackup:true,archiveOnReceive:true,successNotifications:true};
 export const log=[];
-let active=null, activeId='',queue=Promise.resolve(),lastInjection='',lastSyncCount=0,autoRunning=false;
+let active=null, activeId='',queue=Promise.resolve(),lastInjection='',lastSyncCount=0,autoRunning=false,resetPending=false;
 // Short scene-local character texture should not be sent on every generation.
 const generationTicks=new Map(),lastTextureTicks=new Map();
 function ctx(){return SillyTavern.getContext();}
@@ -36,7 +37,40 @@ function enqueue(task){queue=queue.catch(()=>{}).then(task);return queue;}
 async function persist(){if(active)await localPut(active);}
 export function currentArchive(){return active;}
 export function currentIdentity(){return activeId;}
-export function getStats(){return active?{...validateArchive(active),blockedBatches:(active.batches??[]).filter(x=>x.status==='blocked').length,chatId:active.chatId,lastSync:active.lastSync,pending:pendingExtraction(active).assistantCount,batchEvery:settings().batchEvery,recentLog:log.slice(0,8)}:null;}
+/** Erase all Mnemosyne data for THIS chat, including imports, facts, recap
+ * copies, processing markers and read receipts. Original ST chat untouched. */
+export async function resetCurrentChat(){
+  if(!active||!activeId)throw Error('Открой сохранённый чат для сброса памяти.');
+  if(resetPending)throw Error('Сброс уже выполняется.');
+  const expected=active,chatId=activeId;
+  resetPending=true;
+  // Do not let the previously injected memory survive the reset.
+  try{ctx().setExtensionPrompt('SOLA_MNEMOSYNE','',1,1,false);}catch{}
+  try{return await enqueue(async()=>{
+    if(active!==expected||activeId!==chatId||chatIdentity()!==chatId)
+      throw Error('Чат изменился до сброса; ничего не удалено.');
+    const c=ctx();
+    const result=await wipeChatMemory({
+      oldArchive:expected,chatId,chatLength:c.chat?.length??0,
+      chatMetadata:c.chatMetadata,metadataKey:KEY,
+      createArchive:newArchive,putLocal:localPut,deleteLocal:localDelete,
+      saveMetadata:()=>c.saveMetadata(),deleteServer:serverDelete,
+      newId:()=>crypto.randomUUID(),
+      assertSameChat:()=>chatIdentity()===chatId&&active===expected,
+    });
+    active=result.archive;
+    lastSyncCount=0;lastInjection='';
+    generationTicks.delete(chatId);lastTextureTicks.delete(chatId);
+    log.length=0;
+    sendStatus(result.cleanupErrors.length?'warn':'info',
+      result.cleanupErrors.length
+        ?`Создан чистый архив. Предыдущие копии удалены не полностью: ${result.cleanupErrors.join('; ')}`
+        :'Полный сброс памяти этого чата завершён. Теперь можешь сканировать исходный чат заново.');
+    return result;
+  });}finally{resetPending=false;}
+}
+
+export function getStats(){return active?{...validateArchive(active),awaitingManualScan:!!active.awaitingManualScan,blockedBatches:(active.batches??[]).filter(x=>x.status==='blocked').length,chatId:active.chatId,lastSync:active.lastSync,pending:pendingExtraction(active).assistantCount,batchEvery:settings().batchEvery,recentLog:log.slice(0,8)}:null;}
 
 /** Bind a new conversation to an independent archive (or fork a copied metadata pointer). */
 export async function openChat(){return enqueue(async()=>{
@@ -58,7 +92,7 @@ export async function openChat(){return enqueue(async()=>{
   const metadata=currentMeta();metadata[KEY]={archiveId:identity,originChat:id,serverPath:fork?'':(m?.serverPath??'')};
   await ctx().saveMetadata();
   active=next;activeId=id;lastSyncCount=next.sources.length;
-  await captureCurrentChat({all:!next.sources.length,quiet:true});
+  if(!next.awaitingManualScan)await captureCurrentChat({all:!next.sources.length,quiet:true});
   // Establish a neutral baseline on first upgrade/install. Existing archives
   // aren't incorrectly marked as thousands of new entries on first display.
   if(!active.readReceipts){
@@ -70,19 +104,20 @@ export async function openChat(){return enqueue(async()=>{
   return next;
 });}
 export async function captureCurrentChat({all=false,quiet=false}={}){
+  if(active?.awaitingManualScan)return {inserted:0,changed:0};
   if(!active)return {inserted:0};const c=ctx();if(!Array.isArray(c.chat))return {inserted:0};
   const start=all?0:Math.max(0,c.chat.length-5),entries=snapshotChat(c.chat,start);
   const result=mergeSources(active,entries,new Set(entries.map(x=>x.index)));
   if(result.inserted||result.changed){await persist();if(!quiet)sendStatus('info',`Archived ${result.inserted} source variants`);}
   return result;
 }
-export async function fullRescan({notify=false}={}){if(!active)throw Error('No chat');return enqueue(async()=>{
+export async function fullRescan({notify=false}={}){if(resetPending)throw Error('Дождись завершения сброса.');if(!active)throw Error('No chat');return enqueue(async()=>{
   const list=snapshotChat(ctx().chat);const result=mergeSources(active,list,new Set(list.map(x=>x.index)));
-  syncActiveSources(active,ctx().chat);await persist();sendStatus('info',`Full scan: ${result.inserted} new, ${result.changed} updated`);if(notify&&(result.inserted||result.changed))memoryUpdated('scan',`Архив обновлён · +${result.inserted}`);return result;
+  syncActiveSources(active,ctx().chat);delete active.awaitingManualScan;await persist();sendStatus('info',`Full scan: ${result.inserted} new, ${result.changed} updated`);if(notify&&(result.inserted||result.changed))memoryUpdated('scan',`Архив обновлён · +${result.inserted}`);return result;
 });}
 
 /** Archived raw sources stay intact; only active swipe sources may affect retrieval. */
-export async function archiveEvent(){if(!settings().archiveOnReceive)return;
+export async function archiveEvent(){if(resetPending||active?.awaitingManualScan||!settings().archiveOnReceive)return;
   await enqueue(async()=>{
     if(!active || activeId!==chatIdentity())return;
     const before=active.sources.length;await captureCurrentChat({quiet:true});
@@ -104,6 +139,7 @@ async function callArchivist(messages, maxTokens=1800){
 }
 /** Batch extraction; broken response never marks a batch as complete. */
 export async function processBacklog({force=false}={}){
+  if(active?.awaitingManualScan)throw Error('После полного сброса сначала нажми «Обновить архив из чата».');
   if(!active)throw Error('No chat is open');if(!settings().profileId)throw Error('Select an archivist profile');
   return enqueue(async()=>{
     await captureCurrentChat({quiet:true});
@@ -191,7 +227,7 @@ export async function skipFailedBatch(){
 }
 /** Automatically process only NEW assistant replies collected since activation. */
 export async function maybeAutoProcess(){
-  if(autoRunning||!active||!settings().autoUpdate||!settings().profileId)return {waiting:true};
+  if(resetPending||active?.awaitingManualScan||autoRunning||!active||!settings().autoUpdate||!settings().profileId)return {waiting:true};
   const due=pendingExtraction(active).assistantCount;
   if(due<settings().batchEvery)return {waiting:true,assistantCount:due};
   autoRunning=true;
@@ -311,7 +347,7 @@ function sourceQuery(){
 }
 /** Inject before outgoing generation; no direct mutation of ST messages. */
 export async function beforeGeneration(type){
-  const c=ctx();if(!settings().enabled||!active||activeId!==chatIdentity()){
+  const c=ctx();if(resetPending||active?.awaitingManualScan||!settings().enabled||!active||activeId!==chatIdentity()){
     c.setExtensionPrompt('SOLA_MNEMOSYNE','',1,1,false);return;
   }
   if(['quiet','impersonate'].includes(type)){c.setExtensionPrompt('SOLA_MNEMOSYNE','',1,1,false);return;}

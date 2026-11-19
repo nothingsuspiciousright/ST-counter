@@ -133,3 +133,28 @@ If your provider only exposes `API request failed` and the same batch cannot be 
 ## v0.3.10 — independent archivist output limit
 
 The *RP context budget* (`contextTokens`) limits injection into your RP model. The *archivist output limit* (`maxTokens`) limits tokens the separate model can use to produce reasoning plus structured JSON, as enforced by the API/provider. These are different. The archivist output setting is now visible, default 8192. Older hidden 2200-token settings are automatically raised once; user-configured RP context limits are not modified. Chat source batches are smaller and malformed JSON receives a larger-token retry, then is split into separate messages if needed. Never record incomplete results as successful extraction. API refusal still leaves affected originals safely archived and unprocessed.
+
+
+## Full memory reset for the current chat (v0.3.11)
+
+In **Diagnostics**, click **Очистить ВСЮ память текущего чата**. First download
+(and verify) a private full-archive JSON backup. Confirm the warning, then enter
+`СБРОС` exactly. The command creates a new empty archive identity for that chat,
+detaches and deletes the old local IndexedDB archive and removes its known
+SillyTavern server snapshot (where accessible). Deletion failures are explicitly
+reported, not hidden. Downloaded JSON backups must be deleted manually if desired.
+
+This removes ALL Mnemosyne information for the selected chat: imported Memory
+Books, atomic facts, full raw sources (and their virtual complete recap shelf),
+processing states and blocked batches, staged reindex work, read receipts and
+diagnostics. It does **not** delete messages/swipes in SillyTavern, affect other
+chat archives, change the main RP preset, erase the archivist profile, or disable
+Summarize. Any persistent historic server backups that are not referenced by
+the old archive pointer must be handled separately.
+
+A reset stays empty even after reloading SillyTavern: scanning and model requests are paused until you explicitly rescan.
+
+To start over: click **Обновить архив из чата** to read all accessible raw chat
+messages (no API calls), then **Обработать новые события** to extract facts using
+the selected archivist model (may consume paid quota). If you want the previous
+Memory Book too, import it again on the **Наследие** tab.

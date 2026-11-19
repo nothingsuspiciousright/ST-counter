@@ -1,11 +1,18 @@
-# Sola Mnemosyne v0.3.10 — configurable archivist output budget
+# Sola Mnemosyne v0.3.11 — safe per-chat full reset
 
-Public source-code-only release. No private character names, RP excerpts, archives, or keys are included.
+- Adds a destructive **full reset** for only the currently opened RP chat,
+  with a warning and mandatory `СБРОС` typed confirmation.
+- Creates and binds a brand-new empty archive before deleting the old one.
+  Removes all per-chat facts, imported books, sources, original recaps, processing
+  markers, error records and read flags from Mnemosyne. Does not delete ST chat
+  history or other chats. The main preset and archivist Connection Profile persist.
+- Attempts to delete this exact archive's last known server backup. An error is
+  surfaced if IndexedDB or server cleanup is incomplete. Existing private JSON
+  exports downloaded on the user's device cannot be removed by the extension.
+- A reset remains empty across reloads: no automatic refill or paid extraction starts until the first explicit rescan.
+- To rebuild, explicitly scan the current chat and start extracting facts, then
+  optionally reimport the old Memory Book. No silent mass API operation begins
+  after reset.
+- Full reset cannot be undone except by importing a prior private backup.
 
-- The `Бюджет контекста` input controls ONLY how much memory the main roleplay model receives; any user-customized value is preserved.
-- A new separate `Лимит вывода архивариуса` input controls the separate model's completion budget, default 8192. Existing hidden default of 2200 migrates once to 8192; custom values are preserved.
-- Chat extraction now processes pairs of source messages, requests no more than 20 concise atomic facts per job, and retries malformed JSON once with a larger completion budget. If a paired request is still malformed, the two original messages are tried separately. Successful jobs are committed independently and never erased on later failure.
-- No truncated/empty JSON is marked processed. The provider's content-policy refusals are not circumvented. Archive text and original recaps remain untouched.
-- If a provider uses extensive hidden/visible reasoning, even 8192 completion tokens may be insufficient. Consider a non-reasoning archival model or increase the output limit only to what the provider supports.
-
-**Back up your archive JSON locally, never upload it to public GitHub.** Update extension source files and reload. No re-import, reindex or reset is needed. Real provider integration remains to be validated in SillyTavern.
+**Public code contains no private RP content, personal names or API keys.**

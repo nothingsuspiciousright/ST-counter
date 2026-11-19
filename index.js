@@ -14,7 +14,7 @@ function renderProfiles(){const sel=$('#mn-profile');if(!sel)return;sel.replaceC
   for(const p of mn.connectionProfiles())sel.append(mkOption(p.id,`${p.name} · ${p.model??p.api??''}`));sel.value=mn.settings().profileId??'';
 }
 function updateChat(){const s=mn.getStats(),v=$('#mn-overview');if(!v)return;
-  v.textContent=s?`Источников: ${s.sourceCount} · фактов: ${s.factCount} · фрагментов оригинала: ${s.chunkCount} · импортов: ${s.imports} · заблокированных пакетов: ${s.blockedBatches} · новых ответов до автообновления: ${Math.max(0,s.batchEvery-s.pending)} · ${s.valid?'целостность OK':'ОШИБКИ'}`:'Открой сохранённый чат для работы с памятью.';
+  v.textContent=s?.awaitingManualScan?'Память этого чата очищена. Для нового прохода сначала нажми «Обновить архив из чата».':s?`Источников: ${s.sourceCount} · фактов: ${s.factCount} · фрагментов оригинала: ${s.chunkCount} · импортов: ${s.imports} · заблокированных пакетов: ${s.blockedBatches} · новых ответов до автообновления: ${Math.max(0,s.batchEvery-s.pending)} · ${s.valid?'целостность OK':'ОШИБКИ'}`:'Открой сохранённый чат для работы с памятью.';
   renderOriginals();
   $('#mn-sync').textContent=s?.lastSync?`Снимок сервера: ${new Date(s.lastSync).toLocaleString()}`:'Резервная копия ещё не создана';
   $('#mn-injection').textContent=mn.injectionInfo()||'Память ещё не подставлялась в запрос';
@@ -153,6 +153,29 @@ async function initUI(){const container=document.querySelector('#extensions_sett
   });
   bind('#mn-sync-now','click',async()=>{status('Сохраняю резервную копию на сервер SillyTavern…');const r=await mn.backupNow();status(`Сохранено: ${r.path}`);updateChat();});
   bind('#mn-export','click',()=>{mn.exportBackup();status('Полный архив экспортирован в JSON.');});
+  bind('#mn-reset-current','click',async()=>{
+    const a=mn.currentArchive();
+    if(!a)throw Error('Сначала открой сохранённый чат.');
+    const summary=`${a.sources?.length??0} исходников, ${a.facts?.length??0} фактов, ${a.imports?.length??0} импортов и все recap`;
+    if(!window.confirm(`ПОЛНЫЙ СБРОС ПАМЯТИ ТЕКУЩЕГО ЧАТА\n\nБудет очищено: ${summary}.\n\nЧат SillyTavern и настройки подключения останутся, но Mnemosyne забудет всё.\n\nТы уже скачала и проверила резервный JSON?`))return;
+    const typed=window.prompt('Для безвозвратного сброса введи СБРОС заглавными буквами. Чтобы отменить — закрой окно.');
+    if(typed!=='СБРОС'){status('Сброс отменён. Память не изменена.');return;}
+    $('#mn-reset-current').disabled=true;
+    try{
+      status('Создаю новый пустой архив и удаляю данные Мнемозины текущего чата…');
+      const result=await mn.resetCurrentChat();
+      candidates=[];visibleShelfChanges=new Map();selectedShelf='chronology';recapShown=30;
+      $('#mn-search').value='';$('#mn-results').replaceChildren();
+      $('#mn-import-text').value='';$('#mn-import-file').value='';
+      $('#mn-detected').replaceChildren(mkOption('','— источники ещё не искали —'));
+      $('#mn-diagnostics').textContent='Архив сброшен. Новая диагностика ещё не запускалась.';
+      updateChat();
+      status(result.cleanupErrors.length
+        ?`Новый пустой архив готов, но некоторые старые копии не удалось удалить: ${result.cleanupErrors.join('; ')}`
+        :'Полный сброс завершён. Далее: «Обновить архив из чата» → «Обработать новые события». При желании заново импортируй Memory Book.',
+        result.cleanupErrors.length>0);
+    }finally{$('#mn-reset-current').disabled=false;}
+  });
   bind('#mn-restore','change',async()=>{const f=$('#mn-restore').files?.[0];if(!f)return;if(!window.confirm('Заменить текущий архив этой резервной копией? Сначала экспортируй текущую!'))return;await restoreFile(f);});
   bind('#mn-detect','click',listDetection);
   bind('#mn-original-select','change',renderOriginals);
