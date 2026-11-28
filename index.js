@@ -450,3 +450,83 @@ jQuery(() => {
 
     setTimeout(processVisibleMessages, 800);
 });
+
+// 6. Live transitions: current streaming message only.
+import { streamingProcessor as stLiveProcessor } from "../../../../script.js";
+
+jQuery(() => {
+    if (!event_types.STREAM_TOKEN_RECEIVED) return;
+
+    let target = null;
+    let processor = null;
+    let frame = null;
+    const options = { childList: true, subtree: true, characterData: true };
+    const observer = new MutationObserver(queueRender);
+
+    function stop() {
+        observer.disconnect();
+        if (frame !== null) cancelAnimationFrame(frame);
+        frame = null;
+        target = null;
+        processor = null;
+    }
+
+    function queueRender() {
+        if (!target || frame !== null) return;
+        frame = requestAnimationFrame(() => {
+            frame = null;
+            const text = target;
+            if (!text?.isConnected || processor !== stLiveProcessor) {
+                stop();
+                return;
+            }
+            const message = text.closest('.mes[mesid]');
+            if (!message) {
+                stop();
+                return;
+            }
+            // Do not observe our own DOM replacements.
+            observer.disconnect();
+            try {
+                formatMainTextTransitions(message);
+            } catch (error) {
+                console.warn('[ST-counter] Live transition rendering failed', error);
+            } finally {
+                if (target === text && text.isConnected) {
+                    observer.observe(text, options);
+                }
+            }
+        });
+    }
+
+    function watchStream() {
+        const active = stLiveProcessor;
+        const id = active?.messageId;
+        if (!active || active.type === 'impersonate' ||
+            !Number.isInteger(id) || id < 0 || active.isStopped ||
+            active.abortController?.signal.aborted) return;
+
+        const message = document.querySelector(`#chat .mes[mesid="${id}"]`);
+        const text = message?.querySelector('.mes_text');
+        if (!text || message.getAttribute('is_user') === 'true') return;
+        if (target === text && processor === active) return;
+
+        stop();
+        target = text;
+        processor = active;
+        observer.observe(text, options);
+        queueRender();
+    }
+
+    // ST emits this event before updating the rendered streaming text.
+    eventSource.on(event_types.STREAM_TOKEN_RECEIVED, watchStream);
+
+    for (const event of [
+        event_types.GENERATION_STARTED,
+        event_types.GENERATION_ENDED,
+        event_types.GENERATION_STOPPED,
+        event_types.CHAT_CHANGED,
+    ]) {
+        if (event) eventSource.on(event, stop);
+    }
+});
